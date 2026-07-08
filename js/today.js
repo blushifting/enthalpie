@@ -65,19 +65,50 @@ function stockMeta(food) {
   return { committed, unit, denombrable, full };
 }
 
-function perPortionMacros(food) {
-  const chips = macroChips(food.macros).map(([k, v]) => h('span', {}, h('b', {}, v), ' ', k));
-  return h('div', { class: 'inv-row__macros' }, ...chips, h('span', { class: 'inv-row__per' }, '/ portion'));
+/** Extrait la contenance (g/ml) de l'unité de vente, si présente. */
+function parseContenance(unite) {
+  const m = String(unite || '').toLowerCase().match(/(\d+(?:[.,]\d+)?)\s*(kg|g|cl|ml|l)\b/);
+  if (!m) return null;
+  const v = parseFloat(m[1].replace(',', '.'));
+  switch (m[2]) {
+    case 'kg': return { value: v * 1000, unit: 'g' };
+    case 'g':  return { value: v, unit: 'g' };
+    case 'l':  return { value: v * 1000, unit: 'ml' };
+    case 'cl': return { value: v * 10, unit: 'ml' };
+    case 'ml': return { value: v, unit: 'ml' };
+    default:   return null;
+  }
+}
+
+/** Bloc info (toggle « ⓘ nutri ») : ce que représente une portion, macros, plein. */
+function infoBlock(food, meta) {
+  const cont = parseContenance(food.unite_de_vente);
+  const portionPct = Math.max(1, Math.round(100 / meta.full));
+  let l1 = meta.denombrable ? '1 unité' : '1 portion';
+  if (cont) l1 += ` ≈ ${num(cont.value / meta.unit)} ${cont.unit}`;
+  l1 += ` · ${portionPct} % du plein`;
+
+  const macroTxt = macroChips(food.macros).map(([k, v]) => `${v} ${k}`).join(' · ');
+  const plein = `plein : ${num(meta.full)} ${meta.denombrable ? 'unités' : 'portions'}`
+    + (food.unite_de_vente ? ` · ${food.unite_de_vente}` : '');
+
+  return h('div', { class: 'inv-row__info' },
+    h('div', { class: 'inv-row__info-line' }, l1),
+    h('div', { class: 'inv-row__info-line' }, `${macroTxt} / portion`),
+    h('div', { class: 'inv-row__info-line inv-row__info-faint' }, plein),
+  );
 }
 
 /** Construit une ligne d'inventaire. Renvoie une API {el, isDirty, reset, getChange}. */
 function invRow(food, onChange) {
   const meta = stockMeta(food);
+  const m = food.macros || {};
   const isCount = meta.denombrable;
   const max = isCount ? meta.full : 100;
   const start = isCount ? meta.committed : Math.round((meta.committed / meta.full) * 100);
 
   const level = h('span', { class: 'inv-row__level' });
+  const delta = h('div', { class: 'inv-row__delta', hidden: true });
   const slider = h('input', {
     type: 'range', class: 'inv-row__slider',
     min: '0', max: String(max), step: '1', value: String(start),
@@ -89,17 +120,35 @@ function invRow(food, onChange) {
       h('span', { class: 'inv-row__nom' }, food.nom),
       level,
     ),
-    perPortionMacros(food),
+    infoBlock(food, meta),
     slider,
+    delta,
   );
 
   const val = () => Number(slider.value);
   const dirty = () => val() !== start;
+  const noun = (n) => (meta.denombrable ? 'unité' : 'portion') + (Math.abs(n) > 1 ? 's' : '');
+  const newStockOf = (v) => (isCount ? v : (v / 100) * meta.full);
 
   function renderLevel() {
     const v = val();
     level.textContent = isCount ? `${v} / ${meta.full}` : `${v} %`;
-    row.classList.toggle('is-dirty', dirty());
+    const isDirty = dirty();
+    row.classList.toggle('is-dirty', isDirty);
+
+    if (isDirty) {
+      const d = Math.round((meta.committed - newStockOf(v)) * 100) / 100; // >0 = consommé
+      if (d > 0) {
+        delta.className = 'inv-row__delta is-eat';
+        delta.textContent = `🍽 ${num(d)} ${noun(d)} · ${num(m.kcal * d)} kcal · ${num(m.prot_g * d)} g prot`;
+      } else {
+        delta.className = 'inv-row__delta is-add';
+        delta.textContent = `＋ ${num(-d)} ${noun(-d)} remises en stock`;
+      }
+      delta.hidden = false;
+    } else {
+      delta.hidden = true;
+    }
   }
   slider.addEventListener('input', () => { renderLevel(); onChange(); });
   renderLevel();
@@ -111,9 +160,9 @@ function invRow(food, onChange) {
     getChange() {
       if (!dirty()) return null;
       const v = val();
-      const newStock = isCount ? v : (v / 100) * meta.full;
-      const delta = Math.round((meta.committed - newStock) * 1000) / 1000; // >0 = consommé
-      return { food, ref: food.id, delta, newStock, macros: food.macros };
+      const newStock = newStockOf(v);
+      const d = Math.round((meta.committed - newStock) * 1000) / 1000; // >0 = consommé
+      return { food, ref: food.id, delta: d, newStock, macros: food.macros };
     },
   };
 }

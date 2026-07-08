@@ -99,20 +99,23 @@ function infoBlock(food, meta) {
   );
 }
 
-/** Construit une ligne d'inventaire. Renvoie une API {el, isDirty, reset, getChange}. */
+/** Construit une ligne d'inventaire. Le curseur = PART DU STOCK CONSOMMÉE
+ *  (0 % → 100 %), remis à 0 après validation. Le stock restant est affiché à
+ *  droite. Renvoie une API {el, isDirty, reset, getChange}. */
 function invRow(food, onChange) {
   const meta = stockMeta(food);
   const m = food.macros || {};
   const isCount = meta.denombrable;
-  const max = isCount ? meta.full : 100;
-  const start = isCount ? meta.committed : Math.round((meta.committed / meta.full) * 100);
+  const stock = meta.committed;
+  const max = isCount ? Math.max(0, Math.floor(stock)) : 100;
 
-  const level = h('span', { class: 'inv-row__level' });
+  const noun = (n) => (isCount ? 'unité' : 'portion') + (Math.abs(n) > 1 ? 's' : '');
+  const level = h('span', { class: 'inv-row__level' }, `${num(stock)} ${noun(stock)}`);
   const delta = h('div', { class: 'inv-row__delta', hidden: true });
   const slider = h('input', {
     type: 'range', class: 'inv-row__slider',
-    min: '0', max: String(max), step: '1', value: String(start),
-    'aria-label': `Stock de ${food.nom}`,
+    min: '0', max: String(max), step: '1', value: '0',
+    'aria-label': `Part consommée de ${food.nom}`,
   });
 
   const row = h('div', { class: 'inv-row', id: `food-${food.id}` },
@@ -126,25 +129,18 @@ function invRow(food, onChange) {
   );
 
   const val = () => Number(slider.value);
-  const dirty = () => val() !== start;
-  const noun = (n) => (meta.denombrable ? 'unité' : 'portion') + (Math.abs(n) > 1 ? 's' : '');
-  const newStockOf = (v) => (isCount ? v : (v / 100) * meta.full);
+  const dirty = () => val() > 0;
+  const consumed = (v) => (isCount ? v : (v / 100) * stock);   // portions consommées
 
   function renderLevel() {
     const v = val();
-    level.textContent = isCount ? `${v} / ${meta.full}` : `${v} %`;
-    const isDirty = dirty();
+    const isDirty = v > 0;
     row.classList.toggle('is-dirty', isDirty);
-
     if (isDirty) {
-      const d = Math.round((meta.committed - newStockOf(v)) * 100) / 100; // >0 = consommé
-      if (d > 0) {
-        delta.className = 'inv-row__delta is-eat';
-        delta.textContent = `🍽 ${num(d)} ${noun(d)} · ${num(m.kcal * d)} kcal · ${num(m.prot_g * d)} g prot`;
-      } else {
-        delta.className = 'inv-row__delta is-add';
-        delta.textContent = `＋ ${num(-d)} ${noun(-d)} remises en stock`;
-      }
+      const d = Math.round(consumed(v) * 100) / 100;
+      const pct = isCount ? '' : `${v} % · `;
+      delta.className = 'inv-row__delta is-eat';
+      delta.textContent = `🍽 ${pct}${num(d)} ${noun(d)} · ${num(m.kcal * d)} kcal · ${num(m.prot_g * d)} g prot`;
       delta.hidden = false;
     } else {
       delta.hidden = true;
@@ -156,13 +152,11 @@ function invRow(food, onChange) {
   return {
     el: row,
     isDirty: dirty,
-    reset() { slider.value = String(start); renderLevel(); },
+    reset() { slider.value = '0'; renderLevel(); },
     getChange() {
       if (!dirty()) return null;
-      const v = val();
-      const newStock = newStockOf(v);
-      const d = Math.round((meta.committed - newStock) * 1000) / 1000; // >0 = consommé
-      return { food, ref: food.id, delta: d, newStock, macros: food.macros };
+      const d = Math.round(consumed(val()) * 1000) / 1000; // portions consommées (>0)
+      return { food, ref: food.id, delta: d, newStock: stock - d, macros: food.macros };
     },
   };
 }
@@ -252,6 +246,8 @@ export function renderToday(root, model, handlers) {
     h('span', {}, 'Mon stock'),
     infoBtn,
   ));
+  root.append(h('p', { class: 'section-hint' },
+    'Glisse chaque curseur sur la part que tu as mangée (0 → 100 %), puis Valide.'));
 
   if (!ordered.length) {
     root.append(h('div', { class: 'state', style: 'padding:32px 8px' },

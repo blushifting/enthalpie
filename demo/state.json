@@ -37,7 +37,7 @@
       { "id": "P05", "nom": "Pois chiches", "kcal": 130, "prot_g": 8, "fer_mg": 2.4, "unite_de_vente": "bocal", "portions_par_unite": 4, "actif": "oui" },
       { "id": "P06", "nom": "Épinards", "kcal": 25, "prot_g": 3, "fer_mg": 2.7, "unite_de_vente": "sachet", "portions_par_unite": 3, "actif": "oui" },
       { "id": "P07", "nom": "Riz complet", "kcal": 130, "prot_g": 3, "fer_mg": 0.5, "unite_de_vente": "paquet", "portions_par_unite": 12, "actif": "oui" },
-      { "id": "P08", "nom": "Œufs", "kcal": 78, "prot_g": 6, "fer_mg": 0.9, "unite_de_vente": "boîte de 6", "portions_par_unite": 6, "actif": "oui" },
+      { "id": "P08", "nom": "Œufs", "kcal": 78, "prot_g": 6, "fer_mg": 0.9, "unite_de_vente": "boîte de 6", "portions_par_unite": 6, "denombrable": true, "actif": "oui" },
       { "id": "P09", "nom": "Amandes", "kcal": 160, "prot_g": 6, "fer_mg": 1.1, "unite_de_vente": "sachet 200 g", "portions_par_unite": 8, "actif": "oui" },
       { "id": "P10", "nom": "Fromage blanc", "kcal": 70, "prot_g": 8, "fer_mg": 0.1, "unite_de_vente": "pot 500 g", "portions_par_unite": 5, "actif": "oui" },
       { "id": "P12", "nom": "Pain complet", "kcal": 110, "prot_g": 4, "fer_mg": 1.2, "unite_de_vente": "miche", "portions_par_unite": 10, "actif": "oui" }

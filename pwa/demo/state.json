@@ -1,0 +1,48 @@
+{
+  "_note": "Fixture de DÉMO pour prévisualiser l'UI hors backend (?demo). Valeurs de remplissage, pas des recommandations nutritionnelles.",
+  "state": {
+    "date": "2026-07-08",
+    "creneau_courant": "dejeuner",
+    "jauges": {
+      "prot_g": { "valeur": 58, "cible": 110, "ratio": 0.53 },
+      "fer_mg": { "valeur": 9.4, "cible": 0, "ratio": null },
+      "kcal":   { "valeur": 1520, "cible": 2850, "ratio": 0.53 }
+    },
+    "pools": {
+      "petit_dej": [
+        { "id": "M10", "nom": "Bol avoine + yaourt + amandes", "type": "assemblage", "macros": { "kcal": 400, "prot_g": 22, "fer_mg": 2.9 }, "faisable": true }
+      ],
+      "dejeuner": [
+        { "id": "M01", "nom": "Bowl tofu-brocolis-riz", "type": "batch", "macros": { "kcal": 540, "prot_g": 32, "fer_mg": 4.8 }, "faisable": true },
+        { "id": "M02", "nom": "Dahl lentilles-épinards", "type": "batch", "macros": { "kcal": 480, "prot_g": 24, "fer_mg": 6.2 }, "faisable": true },
+        { "id": "M04", "nom": "Galettes seitan-quinoa", "type": "assemblage", "macros": { "kcal": 520, "prot_g": 34, "fer_mg": 3.6 }, "faisable": false }
+      ],
+      "collation": [],
+      "diner": [
+        { "id": "S03", "nom": "Resto (normal)", "type": "exterieur", "macros": { "kcal": 800, "prot_g": 25, "fer_mg": 3 }, "faisable": true },
+        { "id": "S04", "nom": "Repas sauté", "type": "exterieur", "macros": { "kcal": 0, "prot_g": 0, "fer_mg": 0 }, "faisable": true }
+      ]
+    },
+    "stock": {
+      "P01": 6, "P02": 3, "P03": 5, "P04": 10, "P05": 4,
+      "P06": 3, "P07": 8, "P08": 6, "P09": 4, "P10": 0, "P12": 0
+    }
+  },
+  "catalog": {
+    "produits": [
+      { "id": "P01", "nom": "Yaourt grec nature", "kcal": 90, "prot_g": 9, "fer_mg": 0.1, "unite_de_vente": "pot 1 kg", "portions_par_unite": 8, "actif": "oui" },
+      { "id": "P02", "nom": "Tofu ferme", "kcal": 120, "prot_g": 14, "fer_mg": 2.7, "unite_de_vente": "bloc 200 g", "portions_par_unite": 2, "actif": "oui" },
+      { "id": "P03", "nom": "Lentilles corail cuites", "kcal": 115, "prot_g": 9, "fer_mg": 3.3, "unite_de_vente": "portion", "portions_par_unite": 1, "actif": "oui" },
+      { "id": "P04", "nom": "Flocons d'avoine", "kcal": 150, "prot_g": 5, "fer_mg": 1.8, "unite_de_vente": "paquet 500 g", "portions_par_unite": 10, "actif": "oui" },
+      { "id": "P05", "nom": "Pois chiches", "kcal": 130, "prot_g": 8, "fer_mg": 2.4, "unite_de_vente": "bocal", "portions_par_unite": 4, "actif": "oui" },
+      { "id": "P06", "nom": "Épinards", "kcal": 25, "prot_g": 3, "fer_mg": 2.7, "unite_de_vente": "sachet", "portions_par_unite": 3, "actif": "oui" },
+      { "id": "P07", "nom": "Riz complet", "kcal": 130, "prot_g": 3, "fer_mg": 0.5, "unite_de_vente": "paquet", "portions_par_unite": 12, "actif": "oui" },
+      { "id": "P08", "nom": "Œufs", "kcal": 78, "prot_g": 6, "fer_mg": 0.9, "unite_de_vente": "boîte de 6", "portions_par_unite": 6, "actif": "oui" },
+      { "id": "P09", "nom": "Amandes", "kcal": 160, "prot_g": 6, "fer_mg": 1.1, "unite_de_vente": "sachet 200 g", "portions_par_unite": 8, "actif": "oui" },
+      { "id": "P10", "nom": "Fromage blanc", "kcal": 70, "prot_g": 8, "fer_mg": 0.1, "unite_de_vente": "pot 500 g", "portions_par_unite": 5, "actif": "oui" },
+      { "id": "P12", "nom": "Pain complet", "kcal": 110, "prot_g": 4, "fer_mg": 1.2, "unite_de_vente": "miche", "portions_par_unite": 10, "actif": "oui" }
+    ],
+    "plats": []
+  },
+  "courses": { "horizon_jours": 9, "groupes": {}, "lignes": [] }
+}

@@ -121,7 +121,8 @@ function describeError(err) {
 /* Actions de log                                                      */
 /* ------------------------------------------------------------------ */
 const handlers = {
-  onPick: (food) => openLogSheet(food, (qty) => logFood(food, qty)),
+  onLogFood: (food, qty) => logFood(food, qty),                 // curseur intégré à la ligne
+  onPick: (food) => openLogSheet(food, (qty) => logFood(food, qty)), // depuis « Quoi manger ? »
   onLogPlat: (plat) => logPlatAction(plat),
 };
 

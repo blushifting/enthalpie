@@ -51,19 +51,44 @@ function gaugesRow(jauges) {
   );
 }
 
-/* ---------- Liste d'aliments ---------- */
-function foodRow(food, onPick) {
-  const chips = macroChips(food.macros).map(([k, v]) =>
-    h('span', {}, h('b', {}, v), ' ', k));
-  return h('button', { class: 'food-row', type: 'button', onclick: () => onPick(food) },
-    h('div', { class: 'food-row__main' },
+/* ---------- Liste d'aliments (curseur intégré) ---------- */
+function foodRow(food, onLogFood) {
+  const m = food.macros || {};
+  const stock = Number(food.stock) || 0;
+  const sliderMax = Math.max(2, Math.ceil(stock));
+  let qty = stock >= 1 ? 1 : Math.max(0.25, Math.round(stock * 4) / 4);
+
+  const live = h('div', { class: 'food-row__live' });
+  const qtyB = h('span', { class: 'food-row__qty' });
+  const slider = h('input', {
+    type: 'range', class: 'food-row__slider',
+    min: '0.25', max: String(sliderMax), step: '0.25', value: String(qty),
+    'aria-label': `Quantité de ${food.nom} en portions`,
+  });
+  const logBtn = h('button', { class: 'food-row__log', type: 'button' }, 'Loguer');
+
+  function refresh() {
+    qtyB.textContent = `×${num(qty)}`;
+    const prot = (Number(m.prot_g) || 0) * qty;
+    const kcal = (Number(m.kcal) || 0) * qty;
+    const fer = (Number(m.fer_mg) || 0) * qty;
+    live.replaceChildren(
+      h('b', {}, `${num(prot)} g`), ' prot · ',
+      h('b', {}, `${num(kcal)}`), ' kcal',
+      (Number(m.fer_mg) || 0) > 0 ? h('span', {}, ' · ', h('b', {}, `${num(fer)} mg`), ' fer') : '',
+    );
+  }
+  slider.addEventListener('input', () => { qty = Number(slider.value); refresh(); });
+  logBtn.addEventListener('click', () => onLogFood(food, qty));
+  refresh();
+
+  return h('div', { class: 'food-row' },
+    h('div', { class: 'food-row__top' },
       h('div', { class: 'food-row__nom' }, food.nom),
-      h('div', { class: 'food-row__macros' }, ...chips, h('span', { class: 'food-row__per' }, '/ portion')),
+      h('div', { class: 'food-row__stock' }, h('b', {}, num(stock)), ' en stock'),
     ),
-    h('div', { class: 'food-row__stock' },
-      h('b', {}, num(food.stock)),
-      h('span', {}, food.stock > 1.5 ? 'portions' : 'portion'),
-    ),
+    live,
+    h('div', { class: 'food-row__ctl' }, slider, qtyB, logBtn),
   );
 }
 
@@ -122,7 +147,7 @@ export function renderToday(root, model, handlers) {
 
   root.append(h('div', { class: 'list-head' },
     h('span', {}, 'Mes aliments'),
-    h('span', { class: 'list-head__hint' }, 'appuie pour loguer une quantité'),
+    h('span', { class: 'list-head__hint' }, 'règle la quantité, puis Loguer'),
   ));
 
   if (!ordered.length) {
@@ -130,7 +155,7 @@ export function renderToday(root, model, handlers) {
       h('div', { class: 'state__icon' }, '🧺'),
       h('div', { class: 'state__msg' }, 'Aucun aliment en stock. Passe par « Courses » pour réapprovisionner.')));
   } else {
-    root.append(h('div', { class: 'food-list' }, ...ordered.map((f) => foodRow(f, handlers.onPick))));
+    root.append(h('div', { class: 'food-list' }, ...ordered.map((f) => foodRow(f, handlers.onLogFood))));
   }
 
   const ps = platsSection(plats, handlers.onLogPlat);

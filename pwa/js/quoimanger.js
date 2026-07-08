@@ -24,7 +24,7 @@ export function openQuoiManger(state, foods, onChoose) {
             h('div', { class: 'suggest-card__nom' }, item.nom),
             h('div', { class: 'suggest-card__macros' },
               ...macroChips(item.macros).map(([k, v]) => h('span', {}, h('b', {}, v), ' ', k))),
-            h('div', { class: 'suggest-card__go' }, 'choisir ›'),
+            h('div', { class: 'suggest-card__go' }, 'y aller ›'),
           )))
     : h('div', { class: 'state', style: 'padding:28px 8px' },
         h('div', { class: 'state__icon' }, '🧺'),
@@ -33,7 +33,7 @@ export function openQuoiManger(state, foods, onChoose) {
   const sheet = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true' },
     h('div', { class: 'sheet__handle' }),
     h('h2', {}, 'Quoi manger ?'),
-    h('p', { class: 'sub' }, 'Priorité à ce qui te manque aujourd\'hui. Tape pour choisir la quantité.'),
+    h('p', { class: 'sub' }, 'Priorité à ce qui te manque aujourd\'hui. Tape pour aller à son curseur.'),
     body,
   );
   backdrop.append(sheet);

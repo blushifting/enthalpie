@@ -1,9 +1,8 @@
 // Bootstrap : shell, navigation, gate token, chargement state+catalog, handlers.
-import { h, $, clear, toast, num } from './util.js';
+import { h, $, clear, toast } from './util.js';
 import { store } from './store.js';
-import { getState, getCatalog, logProduit, logPlat, ApiError, IS_DEMO } from './api.js';
+import { getState, getCatalog, logProduit, logPlat, adjustStock, ApiError, IS_DEMO } from './api.js';
 import { renderToday } from './today.js';
-import { openLogSheet } from './logsheet.js';
 import { openQuoiManger } from './quoimanger.js';
 import { DEFAULT_API_BASE, CRENEAUX } from './config.js';
 
@@ -27,6 +26,7 @@ function buildModel(state, catalog) {
     stock: Number(stock[pr.id]) || 0,
     portions_par_unite: Number(pr.portions_par_unite) || 1,
     unite_de_vente: pr.unite_de_vente || '',
+    denombrable: pr.denombrable === true || String(pr.denombrable).toLowerCase() === 'oui',
   }));
 
   const seen = new Set();
@@ -121,31 +121,48 @@ function describeError(err) {
 /* Actions de log                                                      */
 /* ------------------------------------------------------------------ */
 const handlers = {
-  onLogFood: (food, qty) => logFood(food, qty),                 // curseur intégré à la ligne
-  onPick: (food) => openLogSheet(food, (qty) => logFood(food, qty)), // depuis « Quoi manger ? »
+  onCommit: (changes) => commitChanges(changes),   // validation de l'inventaire
   onLogPlat: (plat) => logPlatAction(plat),
 };
 
-/** Log fractionné d'un aliment : optimiste (jauges + stock) puis POST. */
-async function logFood(food, qty) {
+/**
+ * Valide les mouvements d'inventaire d'un coup : chaque baisse de curseur =
+ * consommation (log produit → compte dans les jauges) ; chaque hausse =
+ * correction de stock (ajustement, sans impact nutritionnel).
+ */
+async function commitChanges(changes) {
   const snapshot = cloneModel(M);
-  applyMacros(M.state, food.macros, qty, +1);
-  const f = M.foods.find((x) => x.id === food.id);
-  if (f) f.stock = Math.round((f.stock - qty) * 100) / 100;
+
+  // Optimiste : jauges + stock local.
+  for (const c of changes) {
+    if (c.delta > 0) applyMacros(M.state, c.macros, c.delta, +1);
+    const f = M.foods.find((x) => x.id === c.ref);
+    if (f) f.stock = Math.round(c.newStock * 1000) / 1000;
+  }
   paint();
 
-  try {
-    await logProduit(food.id, qty);
-    toast(`${food.nom} · ${num(qty)} — loggé`, 'ok');
+  const ops = changes.map((c) => (c.delta > 0
+    ? logProduit(c.ref, c.delta)          // baisse = consommé
+    : adjustStock(c.ref, -c.delta)));     // hausse = -delta ajouté au stock
+  const results = await Promise.allSettled(ops);
+  const failed = results.filter((r) => r.status === 'rejected');
+
+  if (!failed.length) {
+    toast(`${changes.length} aliment${changes.length > 1 ? 's' : ''} mis à jour`, 'ok');
     reconcile();
-  } catch (err) {
-    if (isOffline(err)) {
-      store.enqueue({ action: 'log', type: 'produit', ref: food.id, quantite: qty });
-      toast('Hors-ligne — action mise en file', 'err');
-    } else {
-      M = snapshot; paint();
-      toast(describeError(err), 'err');
-    }
+  } else if (failed.every((r) => isOffline(r.reason))) {
+    changes.forEach((c, i) => {
+      if (results[i].status === 'rejected') {
+        store.enqueue(c.delta > 0
+          ? { action: 'log', type: 'produit', ref: c.ref, quantite: c.delta }
+          : { action: 'log', type: 'ajustement', ref: c.ref, delta: -c.delta });
+      }
+    });
+    toast('Hors-ligne — modifications mises en file', 'err');
+  } else {
+    // Échec métier : le serveur fait foi, on recale.
+    toast(describeError(failed[0].reason), 'err');
+    reconcile();
   }
 }
 
@@ -263,8 +280,19 @@ document.querySelectorAll('.tab').forEach((t) =>
 $('#btn-settings').addEventListener('click', () => openSettings());
 $('#btn-scan').addEventListener('click', () => toast('Scan code-barres — étape suivante du build'));
 fab.addEventListener('click', () => {
-  if (M) openQuoiManger(M.state, M.foods, handlers.onPick);
+  if (M) openQuoiManger(M.state, M.foods, (food) => scrollToFood(food.id));
 });
+
+/** Fait défiler jusqu'à la ligne d'un aliment et la fait clignoter (depuis « Quoi manger ? »). */
+function scrollToFood(id) {
+  const el = document.getElementById(`food-${id}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.remove('flash');
+  void el.offsetWidth;           // relance l'animation
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 1500);
+}
 
 window.addEventListener('online', () => { if (currentScreen === 'today') renderTodayScreen(); });
 

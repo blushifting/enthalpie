@@ -1,5 +1,8 @@
-// Écran « Aujourd'hui » : jauges du JOUR + liste d'aliments dispo (curseur) +
-// section plats repliée (option occasionnelle). Modèle produit-centrique.
+// Écran « Aujourd'hui » : jauges du JOUR + inventaire à curseurs.
+// Modèle inventaire : chaque curseur = niveau de stock (% du plein, ou nombre
+// d'unités pour les dénombrables). On baisse les curseurs au fil de la semaine ;
+// un seul bouton « Valider » enregistre les baisses (= consommation → nutrition).
+// Les curseurs modifiés sont surlignés jusqu'à validation.
 import { h, clear, num, macroChips } from './util.js';
 import { rank } from './engine.js';
 
@@ -51,45 +54,87 @@ function gaugesRow(jauges) {
   );
 }
 
-/* ---------- Liste d'aliments (curseur intégré) ---------- */
-function foodRow(food, onLogFood) {
-  const m = food.macros || {};
-  const stock = Number(food.stock) || 0;
-  const sliderMax = Math.max(2, Math.ceil(stock));
-  let qty = stock >= 1 ? 1 : Math.max(0.25, Math.round(stock * 4) / 4);
+/* ---------- Inventaire ---------- */
+/** Métadonnées de stock : plein (capacité), unité, dénombrable. */
+function stockMeta(food) {
+  const committed = Math.max(0, Number(food.stock) || 0);
+  const unit = Math.max(1, Number(food.portions_par_unite) || 1);
+  const denombrable = !!food.denombrable;
+  // Plein = capacité arrondie au conteneur entier (au moins une unité de vente).
+  const full = Math.max(unit, Math.ceil(committed / unit) * unit) || 1;
+  return { committed, unit, denombrable, full };
+}
 
-  const live = h('div', { class: 'food-row__live' });
-  const qtyB = h('span', { class: 'food-row__qty' });
+function perPortionMacros(food) {
+  const chips = macroChips(food.macros).map(([k, v]) => h('span', {}, h('b', {}, v), ' ', k));
+  return h('div', { class: 'inv-row__macros' }, ...chips, h('span', { class: 'inv-row__per' }, '/ portion'));
+}
+
+/** Construit une ligne d'inventaire. Renvoie une API {el, isDirty, reset, getChange}. */
+function invRow(food, onChange) {
+  const meta = stockMeta(food);
+  const isCount = meta.denombrable;
+  const max = isCount ? meta.full : 100;
+  const start = isCount ? meta.committed : Math.round((meta.committed / meta.full) * 100);
+
+  const level = h('span', { class: 'inv-row__level' });
   const slider = h('input', {
-    type: 'range', class: 'food-row__slider',
-    min: '0.25', max: String(sliderMax), step: '0.25', value: String(qty),
-    'aria-label': `Quantité de ${food.nom} en portions`,
+    type: 'range', class: 'inv-row__slider',
+    min: '0', max: String(max), step: '1', value: String(start),
+    'aria-label': `Stock de ${food.nom}`,
   });
-  const logBtn = h('button', { class: 'food-row__log', type: 'button' }, 'Loguer');
 
-  function refresh() {
-    qtyB.textContent = `×${num(qty)}`;
-    const prot = (Number(m.prot_g) || 0) * qty;
-    const kcal = (Number(m.kcal) || 0) * qty;
-    const fer = (Number(m.fer_mg) || 0) * qty;
-    live.replaceChildren(
-      h('b', {}, `${num(prot)} g`), ' prot · ',
-      h('b', {}, `${num(kcal)}`), ' kcal',
-      (Number(m.fer_mg) || 0) > 0 ? h('span', {}, ' · ', h('b', {}, `${num(fer)} mg`), ' fer') : '',
-    );
-  }
-  slider.addEventListener('input', () => { qty = Number(slider.value); refresh(); });
-  logBtn.addEventListener('click', () => onLogFood(food, qty));
-  refresh();
-
-  return h('div', { class: 'food-row' },
-    h('div', { class: 'food-row__top' },
-      h('div', { class: 'food-row__nom' }, food.nom),
-      h('div', { class: 'food-row__stock' }, h('b', {}, num(stock)), ' en stock'),
+  const row = h('div', { class: 'inv-row', id: `food-${food.id}` },
+    h('div', { class: 'inv-row__top' },
+      h('span', { class: 'inv-row__nom' }, food.nom),
+      level,
     ),
-    live,
-    h('div', { class: 'food-row__ctl' }, slider, qtyB, logBtn),
+    perPortionMacros(food),
+    slider,
   );
+
+  const val = () => Number(slider.value);
+  const dirty = () => val() !== start;
+
+  function renderLevel() {
+    const v = val();
+    level.textContent = isCount ? `${v} / ${meta.full}` : `${v} %`;
+    row.classList.toggle('is-dirty', dirty());
+  }
+  slider.addEventListener('input', () => { renderLevel(); onChange(); });
+  renderLevel();
+
+  return {
+    el: row,
+    isDirty: dirty,
+    reset() { slider.value = String(start); renderLevel(); },
+    getChange() {
+      if (!dirty()) return null;
+      const v = val();
+      const newStock = isCount ? v : (v / 100) * meta.full;
+      const delta = Math.round((meta.committed - newStock) * 1000) / 1000; // >0 = consommé
+      return { food, ref: food.id, delta, newStock, macros: food.macros };
+    },
+  };
+}
+
+/** Barre de validation (visible dès qu'il y a des modifications). */
+function validateBar(onValider, onAnnuler) {
+  const count = h('span', { class: 'valbar__count' });
+  const bar = h('div', { class: 'valbar', hidden: true },
+    h('span', { class: 'valbar__info' }, h('span', { class: 'valbar__dot' }), count),
+    h('div', { class: 'valbar__actions' },
+      h('button', { class: 'valbar__annuler', type: 'button', onclick: onAnnuler }, 'Annuler'),
+      h('button', { class: 'valbar__valider', type: 'button', onclick: onValider }, 'Valider'),
+    ),
+  );
+  return {
+    el: bar,
+    set(n) {
+      bar.hidden = n === 0;
+      count.textContent = `${n} aliment${n > 1 ? 's' : ''} modifié${n > 1 ? 's' : ''}`;
+    },
+  };
 }
 
 /* ---------- Section plats (repliée) ---------- */
@@ -127,12 +172,13 @@ function platsSection(plats, onLogPlat) {
 
 /**
  * @param root  conteneur
- * @param model { state, foods:[{id,nom,macros,stock,...}], plats:[...] }
- * @param handlers { onPick(food), onLogPlat(plat) }
+ * @param model { state, foods:[{id,nom,macros,stock,portions_par_unite,denombrable}], plats:[...] }
+ * @param handlers { onCommit(changes), onLogPlat(plat) }
  */
 export function renderToday(root, model, handlers) {
   clear(root);
   const { state, foods, plats } = model;
+  const fab = document.getElementById('btn-quoi-manger');
 
   if (state.__offline) {
     root.append(h('div', { class: 'offline-banner' }, '⚡ Hors-ligne — données du dernier chargement'));
@@ -141,13 +187,21 @@ export function renderToday(root, model, handlers) {
   root.append(h('p', { class: 'day-caption' }, 'Apports du jour'));
   root.append(gaugesRow(state.jauges));
 
-  // Aliments dispo (stock > 0), triés silencieusement par priorité du jour.
-  const dispo = foods.filter((f) => f.stock > 0);
+  // Aliments en stock, triés silencieusement par priorité du jour.
+  const dispo = foods.filter((f) => (Number(f.stock) || 0) > 0);
   const ordered = rank(state, dispo).map((r) => r.item);
 
+  const listEl = h('div', { class: 'inv-list' });
+  const infoBtn = h('button', { class: 'infotoggle', type: 'button', 'aria-pressed': 'false' }, 'ⓘ nutri');
+  infoBtn.addEventListener('click', () => {
+    const on = listEl.classList.toggle('show-nutri');
+    infoBtn.classList.toggle('is-on', on);
+    infoBtn.setAttribute('aria-pressed', String(on));
+  });
+
   root.append(h('div', { class: 'list-head' },
-    h('span', {}, 'Mes aliments'),
-    h('span', { class: 'list-head__hint' }, 'règle la quantité, puis Loguer'),
+    h('span', {}, 'Mon stock'),
+    infoBtn,
   ));
 
   if (!ordered.length) {
@@ -155,7 +209,23 @@ export function renderToday(root, model, handlers) {
       h('div', { class: 'state__icon' }, '🧺'),
       h('div', { class: 'state__msg' }, 'Aucun aliment en stock. Passe par « Courses » pour réapprovisionner.')));
   } else {
-    root.append(h('div', { class: 'food-list' }, ...ordered.map((f) => foodRow(f, handlers.onLogFood))));
+    const bar = validateBar(() => onValider(), () => onAnnuler());
+    const rows = ordered.map((f) => invRow(f, () => updateBar()));
+    rows.forEach((r) => listEl.append(r.el));
+    root.append(listEl);
+    root.append(bar.el);
+
+    function updateBar() {
+      const n = rows.filter((r) => r.isDirty()).length;
+      bar.set(n);
+      if (fab) fab.hidden = n > 0;           // le FAB s'efface tant qu'il y a des modifs
+    }
+    function onAnnuler() { rows.forEach((r) => r.reset()); updateBar(); }
+    function onValider() {
+      const changes = rows.map((r) => r.getChange()).filter(Boolean);
+      if (changes.length) handlers.onCommit(changes);
+    }
+    updateBar();
   }
 
   const ps = platsSection(plats, handlers.onLogPlat);

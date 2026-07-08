@@ -317,28 +317,28 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .list-head > span:first-child { font-size: 15px; font-weight: 650; }
 .list-head__hint { font-size: 11.5px; color: var(--txt-dim); }
 
-.food-list { display: flex; flex-direction: column; gap: 8px; }
+.food-list { display: flex; flex-direction: column; gap: 10px; }
 .food-row {
-  min-height: 62px;
-  display: flex; align-items: center; gap: 12px;
+  display: flex; flex-direction: column; gap: 8px;
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius-sm); padding: 10px 14px; text-align: left;
-  transition: background .12s ease, transform .08s ease;
+  border-radius: var(--radius-sm); padding: 12px 14px 13px;
 }
-.food-row:active { background: var(--surface-2); transform: scale(.99); }
-.food-row__main { flex: 1; min-width: 0; }
-.food-row__nom { font-size: 15px; font-weight: 600; line-height: 1.25; }
-.food-row__macros {
-  font-size: 11.5px; color: var(--txt-muted); margin-top: 3px;
-  display: flex; gap: 9px; flex-wrap: wrap; align-items: baseline;
+.food-row__top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.food-row__nom { font-size: 15px; font-weight: 600; line-height: 1.25; min-width: 0; }
+.food-row__stock { flex-shrink: 0; font-size: 11.5px; color: var(--txt-dim); }
+.food-row__stock b { color: var(--accent); font-weight: 700; font-size: 14px; }
+
+.food-row__live { font-size: 12.5px; color: var(--txt-muted); }
+.food-row__live b { color: var(--txt); font-weight: 600; }
+
+.food-row__ctl { display: flex; align-items: center; gap: 12px; }
+.food-row__slider { flex: 1; min-width: 0; }
+.food-row__qty { font-size: 15px; font-weight: 700; color: var(--accent); min-width: 34px; text-align: center; }
+.food-row__log {
+  flex-shrink: 0; height: 40px; padding: 0 16px; border-radius: 10px;
+  background: var(--accent); color: #0b1020; border: 0; font-weight: 700; font-size: 13.5px;
 }
-.food-row__macros b { color: var(--txt); font-weight: 600; }
-.food-row__per { color: var(--txt-dim); }
-.food-row__stock {
-  flex-shrink: 0; text-align: right; display: flex; flex-direction: column; line-height: 1.1;
-}
-.food-row__stock b { font-size: 17px; font-weight: 700; color: var(--accent); }
-.food-row__stock span { font-size: 10px; color: var(--txt-dim); }
+.food-row__log:active { filter: brightness(.94); }
 
 /* ---------- Feuille de quantité (curseur) ---------- */
 .qty__head {
@@ -348,17 +348,18 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .qty__reste { font-size: 12.5px; color: var(--txt-muted); }
 .qty__reste.is-neg { color: var(--danger); }
 
-.qty__slider {
+.qty__slider, .food-row__slider {
   -webkit-appearance: none; appearance: none; width: 100%; height: 8px;
-  border-radius: 999px; background: var(--surface-2); outline: none; margin: 6px 0 16px;
+  border-radius: 999px; background: var(--surface-2); outline: none;
 }
-.qty__slider::-webkit-slider-thumb {
+.qty__slider { margin: 6px 0 16px; }
+.qty__slider::-webkit-slider-thumb, .food-row__slider::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 28px; height: 28px; border-radius: 50%;
   background: var(--accent); border: 3px solid var(--bg-elev); cursor: pointer;
   box-shadow: 0 2px 8px rgba(0,0,0,.4);
 }
-.qty__slider::-moz-range-thumb {
+.qty__slider::-moz-range-thumb, .food-row__slider::-moz-range-thumb {
   width: 28px; height: 28px; border-radius: 50%;
   background: var(--accent); border: 3px solid var(--bg-elev); cursor: pointer;
 }

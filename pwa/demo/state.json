@@ -32,7 +32,7 @@
     "produits": [
       { "id": "P01", "nom": "Yaourt grec nature", "kcal": 90, "prot_g": 9, "fer_mg": 0.1, "unite_de_vente": "pot 1 kg", "portions_par_unite": 8, "actif": "oui" },
       { "id": "P02", "nom": "Tofu ferme", "kcal": 120, "prot_g": 14, "fer_mg": 2.7, "unite_de_vente": "bloc 200 g", "portions_par_unite": 2, "actif": "oui" },
-      { "id": "P03", "nom": "Lentilles corail cuites", "kcal": 115, "prot_g": 9, "fer_mg": 3.3, "unite_de_vente": "portion", "portions_par_unite": 1, "actif": "oui" },
+      { "id": "P03", "nom": "Lentilles corail cuites", "kcal": 115, "prot_g": 9, "fer_mg": 3.3, "unite_de_vente": "barquette 250 g", "portions_par_unite": 2, "actif": "oui" },
       { "id": "P04", "nom": "Flocons d'avoine", "kcal": 150, "prot_g": 5, "fer_mg": 1.8, "unite_de_vente": "paquet 500 g", "portions_par_unite": 10, "actif": "oui" },
       { "id": "P05", "nom": "Pois chiches", "kcal": 130, "prot_g": 8, "fer_mg": 2.4, "unite_de_vente": "bocal", "portions_par_unite": 4, "actif": "oui" },
       { "id": "P06", "nom": "Épinards", "kcal": 25, "prot_g": 3, "fer_mg": 2.7, "unite_de_vente": "sachet", "portions_par_unite": 3, "actif": "oui" },

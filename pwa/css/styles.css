@@ -338,16 +338,25 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   font-variant-numeric: tabular-nums;
 }
 
-/* Nutri masquée par défaut (toggle « ⓘ nutri »). */
-.inv-row__macros {
-  font-size: 11.5px; color: var(--txt-muted); display: none;
-  gap: 9px; flex-wrap: wrap; align-items: baseline;
+/* Bloc info masqué par défaut (toggle « ⓘ nutri »). */
+.inv-row__info {
+  display: none; flex-direction: column; gap: 2px;
+  font-size: 11.5px; color: var(--txt-muted);
 }
-.inv-list.show-nutri .inv-row__macros { display: flex; }
-.inv-row__macros b { color: var(--txt); font-weight: 600; }
-.inv-row__per { color: var(--txt-dim); }
+.inv-list.show-nutri .inv-row__info { display: flex; }
+.inv-row__info-line { line-height: 1.35; }
+.inv-row__info-faint { color: var(--txt-dim); }
 
 .inv-row__slider { width: 100%; }
+
+/* Badge différentiel : ce qu'on vient de « manger » en bougeant le curseur. */
+.inv-row__delta {
+  align-self: flex-start; font-size: 12px; font-weight: 600;
+  padding: 4px 11px; border-radius: 999px; margin-top: 2px;
+}
+.inv-row__delta[hidden] { display: none; }
+.inv-row__delta.is-eat { background: color-mix(in srgb, var(--prot) 20%, var(--surface)); color: var(--prot); }
+.inv-row__delta.is-add { background: var(--surface-2); color: var(--txt-muted); }
 
 /* Curseur modifié depuis la dernière validation : surligné. */
 .inv-row.is-dirty {

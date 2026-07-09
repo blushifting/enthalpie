@@ -10,6 +10,8 @@ export const KEY = {
   apiBase: 'enthalpie.apiBase',
   state:   'enthalpie.state.cache',
   catalog: 'enthalpie.catalog.cache',
+  courses: 'enthalpie.courses.cache',
+  manual:  'enthalpie.courses.manual',
   queue:   'enthalpie.queue',
 };
 

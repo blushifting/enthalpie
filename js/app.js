@@ -1,8 +1,9 @@
 // Bootstrap : shell, navigation, gate token, chargement state+catalog, handlers.
 import { h, $, clear, toast } from './util.js';
 import { store } from './store.js';
-import { getState, getCatalog, logProduit, logPlat, adjustStock, ApiError, IS_DEMO } from './api.js';
+import { getState, getCatalog, getCourses, logProduit, logPlat, adjustStock, logCourses, ApiError, IS_DEMO } from './api.js';
 import { renderToday } from './today.js';
+import { renderCourses } from './courses.js';
 import { openQuoiManger } from './quoimanger.js';
 import { DEFAULT_API_BASE, CRENEAUX } from './config.js';
 
@@ -12,6 +13,7 @@ const fab = $('#btn-quoi-manger');
 
 let currentScreen = 'today';
 let M = null; // modèle courant { state, foods, plats }
+let CoursesData = null; // dernière liste de courses chargée
 
 /* ------------------------------------------------------------------ */
 /* Construction du modèle produit-centrique                            */
@@ -48,11 +50,12 @@ function setScreen(name) {
     t.classList.toggle('is-active', t.dataset.screen === name));
   fab.hidden = name !== 'today';
   if (name === 'today') renderTodayScreen();
+  else if (name === 'courses') renderCoursesScreen();
   else renderPlaceholder(name);
 }
 
 function renderPlaceholder(name) {
-  const titles = { courses: '🛒 Courses', cuisine: '🍳 Cuisine', bilan: '📈 Bilan' };
+  const titles = { cuisine: '🍳 Cuisine', bilan: '📈 Bilan' };
   clear(appEl);
   appEl.append(h('div', { class: 'placeholder-screen' },
     h('h2', {}, titles[name] || name),
@@ -114,6 +117,57 @@ function describeError(err) {
     case 'backend': return `Le backend a répondu : « ${err.message} ». Vérifie le token dans les réglages.`;
     case 'http':    return `Le serveur a renvoyé une erreur (${err.message}).`;
     default:        return err.message;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran Courses                                                       */
+/* ------------------------------------------------------------------ */
+function loadingMsg(msg) {
+  clear(appEl);
+  appEl.append(h('div', { class: 'state' },
+    h('div', { class: 'spinner' }),
+    h('div', { class: 'state__msg' }, msg)));
+}
+
+const coursesHandlers = { onValider: (items) => validerCourses(items) };
+
+async function renderCoursesScreen() {
+  if (!IS_DEMO && !store.hasToken()) { openSettings({ force: true }); return; }
+  loadingMsg('Chargement des courses…');
+  try {
+    const courses = await getCourses();
+    CoursesData = courses;
+    store.cacheCourses(courses);
+    renderCourses(appEl, courses, coursesHandlers);
+  } catch (err) {
+    const cc = store.getCachedCourses();
+    if (cc && cc.courses) {
+      renderCourses(appEl, { ...cc.courses, __offline: true }, coursesHandlers);
+      toast('Hors-ligne — dernière liste connue', 'err');
+    } else if (err instanceof ApiError && err.kind === 'noauth') {
+      openSettings({ force: true });
+    } else if (currentScreen === 'courses') {
+      errorState(describeError(err), renderCoursesScreen);
+    }
+  }
+}
+
+/** Valide les articles cochés : POST courses (incrémente le stock côté backend). */
+async function validerCourses(items) {
+  if (!items.length) { toast('Liste mise à jour', 'ok'); return; }
+  try {
+    await logCourses(items);
+    const n = items.length;
+    toast(`${n} article${n > 1 ? 's' : ''} ajouté${n > 1 ? 's' : ''} au stock`, 'ok');
+    M = null;                       // le stock a changé → Aujourd'hui se rechargera
+  } catch (err) {
+    if (isOffline(err)) {
+      store.enqueue({ action: 'log', type: 'courses', items });
+      toast('Hors-ligne — validation mise en file', 'err');
+    } else {
+      toast(describeError(err), 'err');
+    }
   }
 }
 
@@ -294,6 +348,9 @@ function scrollToFood(id) {
   setTimeout(() => el.classList.remove('flash'), 1500);
 }
 
-window.addEventListener('online', () => { if (currentScreen === 'today') renderTodayScreen(); });
+window.addEventListener('online', () => {
+  if (currentScreen === 'today') renderTodayScreen();
+  else if (currentScreen === 'courses') renderCoursesScreen();
+});
 
 setScreen('today');

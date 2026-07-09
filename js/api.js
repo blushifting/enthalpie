@@ -63,6 +63,7 @@ export const postLog     = (payload) => apiPost({ action: 'log', ...payload });
 export const logProduit  = (ref, quantite) => postLog({ type: 'produit', ref, quantite });
 export const logPlat     = (ref, quantite = 1) => postLog({ type: 'plat', ref, quantite });
 export const adjustStock = (ref, delta) => postLog({ type: 'ajustement', ref, delta });
+export const logCourses  = (items) => postLog({ type: 'courses', items });
 
 // --- Fixture démo (chargée à la volée) ---
 let _demoCache;

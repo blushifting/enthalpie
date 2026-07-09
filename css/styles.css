@@ -201,6 +201,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .fab:active { filter: brightness(.94); }
 .fab__icon { font-size: 16px; }
+/* [hidden] seul ne suffit pas : .fab pose display:flex → règle plus spécifique. */
+.fab[hidden] { display: none; }
 
 /* ---------- Tabbar ---------- */
 .tabbar {
@@ -398,6 +400,55 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   font-size: 14px; font-weight: 700; padding: 9px 20px;
 }
 .valbar__valider:active { filter: brightness(.94); }
+
+/* ---------- Écran Courses ---------- */
+.crs-group { margin-top: 20px; }
+.crs-group__head { display: flex; align-items: baseline; gap: 8px; margin: 0 2px 9px; }
+.crs-group__mag { font-size: 14px; font-weight: 650; letter-spacing: .2px; }
+.crs-group__count {
+  font-size: 11px; color: var(--txt-dim);
+  background: var(--surface-2); border-radius: 999px; padding: 1px 8px;
+}
+.crs-list { display: flex; flex-direction: column; gap: 8px; }
+.crs-row {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 10px 14px; min-height: var(--tap);
+  transition: border-color .15s ease, opacity .15s ease;
+}
+.crs-row__box {
+  width: 22px; height: 22px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer;
+}
+.crs-row__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.crs-row__nom { font-size: 15px; font-weight: 600; line-height: 1.25; }
+.crs-row__meta { font-size: 12px; color: var(--txt-muted); }
+.crs-row__hint { color: var(--txt-dim); }
+.crs-row.is-checked { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.crs-row:not(.is-checked) { opacity: .5; }
+.crs-row:not(.is-checked) .crs-row__nom {
+  text-decoration: line-through; text-decoration-color: var(--txt-dim);
+}
+.crs-row__del {
+  flex-shrink: 0; background: transparent; border: 0; color: var(--txt-dim);
+  font-size: 14px; padding: 8px; line-height: 1;
+}
+.crs-row__del:active { color: var(--danger); }
+.crs-empty { color: var(--txt-dim); font-size: 12.5px; margin: 2px 2px 10px; line-height: 1.4; }
+
+.crs-add { display: flex; gap: 8px; margin-top: 10px; }
+.crs-add__input {
+  flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); color: var(--txt); font-size: 15px;
+  padding: 12px 14px; min-height: var(--tap);
+}
+.crs-add__input::placeholder { color: var(--txt-dim); }
+.crs-add__input:focus { outline: none; border-color: var(--accent); }
+.crs-add__btn {
+  flex-shrink: 0; width: var(--tap); border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--line);
+  color: var(--txt); font-size: 22px; font-weight: 600;
+}
+.crs-add__btn:active { background: var(--surface); }
 
 /* ---------- Feuille de quantité (curseur) ---------- */
 .qty__head {

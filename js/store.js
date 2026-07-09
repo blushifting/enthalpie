@@ -33,6 +33,26 @@ export const store = {
     write(KEY.catalog, JSON.stringify({ at: Date.now(), catalog }));
   },
   getCachedCatalog() { return readJSON(KEY.catalog, null); },
+  cacheCourses(courses) {
+    write(KEY.courses, JSON.stringify({ at: Date.now(), courses }));
+  },
+  getCachedCourses() { return readJSON(KEY.courses, null); },
+
+  // --- Ajouts manuels de courses (texte libre, locaux, hors compteurs) ---
+  getCoursesManual() { return readJSON(KEY.manual, []); },
+  addCoursesManual(texte) {
+    const t = String(texte || '').trim();
+    if (!t) return this.getCoursesManual();
+    const list = this.getCoursesManual();
+    list.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, texte: t });
+    write(KEY.manual, JSON.stringify(list));
+    return list;
+  },
+  removeCoursesManual(id) {
+    const list = this.getCoursesManual().filter((x) => x.id !== id);
+    write(KEY.manual, JSON.stringify(list));
+    return list;
+  },
 
   // --- File de log offline (rejouée au retour réseau) ---
   getQueue() { return readJSON(KEY.queue, []); },

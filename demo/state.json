@@ -44,5 +44,25 @@
     ],
     "plats": []
   },
-  "courses": { "horizon_jours": 9, "groupes": {}, "lignes": [] }
+  "courses": {
+    "horizon_jours": 9,
+    "lignes": [
+      { "produit_id": "P10", "nom": "Fromage blanc", "magasin": "Carrefour", "unites": 1, "unite_de_vente": "pot 500 g", "portions_manquantes": 5 },
+      { "produit_id": "P12", "nom": "Pain complet", "magasin": "Carrefour", "unites": 1, "unite_de_vente": "miche", "portions_manquantes": 8.3 },
+      { "produit_id": "P02", "nom": "Tofu ferme", "magasin": "Naturalia", "unites": 3, "unite_de_vente": "bloc 200 g", "portions_manquantes": 4.7 },
+      { "produit_id": "P06", "nom": "Épinards", "magasin": "Picard", "unites": 2, "unite_de_vente": "sachet 600 g", "portions_manquantes": 3.4 }
+    ],
+    "groupes": {
+      "Carrefour": [
+        { "produit_id": "P10", "nom": "Fromage blanc", "magasin": "Carrefour", "unites": 1, "unite_de_vente": "pot 500 g", "portions_manquantes": 5 },
+        { "produit_id": "P12", "nom": "Pain complet", "magasin": "Carrefour", "unites": 1, "unite_de_vente": "miche", "portions_manquantes": 8.3 }
+      ],
+      "Naturalia": [
+        { "produit_id": "P02", "nom": "Tofu ferme", "magasin": "Naturalia", "unites": 3, "unite_de_vente": "bloc 200 g", "portions_manquantes": 4.7 }
+      ],
+      "Picard": [
+        { "produit_id": "P06", "nom": "Épinards", "magasin": "Picard", "unites": 2, "unite_de_vente": "sachet 600 g", "portions_manquantes": 3.4 }
+      ]
+    }
+  }
 }

@@ -11,7 +11,10 @@ export const KEY = {
   state:   'enthalpie.state.cache',
   catalog: 'enthalpie.catalog.cache',
   courses: 'enthalpie.courses.cache',
-  manual:  'enthalpie.courses.manual',
+  manual:  'enthalpie.courses.manual',   // ajouts manuels (texte libre)
+  draft:   'enthalpie.courses.draft',    // cases cochées + quantités ajustées
+  exclus:  'enthalpie.courses.exclus',   // articles « ne plus proposer »
+  last:    'enthalpie.courses.last',     // dernier lot validé (pour annuler)
   queue:   'enthalpie.queue',
 };
 

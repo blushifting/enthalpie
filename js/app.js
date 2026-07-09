@@ -130,7 +130,11 @@ function loadingMsg(msg) {
     h('div', { class: 'state__msg' }, msg)));
 }
 
-const coursesHandlers = { onValider: (items) => validerCourses(items) };
+const coursesHandlers = {
+  onValider: (items) => validerCourses(items),
+  onUndo: () => undoCourses(),
+  onExclure: (id, nom) => exclureCourse(id, nom),
+};
 
 async function renderCoursesScreen() {
   if (!IS_DEMO && !store.hasToken()) { openSettings({ force: true }); return; }
@@ -155,20 +159,57 @@ async function renderCoursesScreen() {
 
 /** Valide les articles cochés : POST courses (incrémente le stock côté backend). */
 async function validerCourses(items) {
-  if (!items.length) { toast('Liste mise à jour', 'ok'); return; }
+  if (!items.length) return;
   try {
-    await logCourses(items);
+    const res = await logCourses(items);
+    const reverse = res && Array.isArray(res.courses_validees)
+      ? res.courses_validees.map((a) => ({ produit_id: a.produit_id, portions: Number(a.portions) || 0 }))
+      : items.map((i) => ({ produit_id: i.produit_id, portions: Number(i.unites) || 0 }));
+    store.setLastCourses({ at: Date.now(), reverse });   // pour l'annulation
     const n = items.length;
     toast(`${n} article${n > 1 ? 's' : ''} ajouté${n > 1 ? 's' : ''} au stock`, 'ok');
     M = null;                       // le stock a changé → Aujourd'hui se rechargera
+    if (currentScreen === 'courses') renderCourses(appEl, CoursesData, coursesHandlers); // affiche le bandeau d'annulation
   } catch (err) {
     if (isOffline(err)) {
       store.enqueue({ action: 'log', type: 'courses', items });
       toast('Hors-ligne — validation mise en file', 'err');
+      // Pas d'annulation hors-ligne : les portions exactes ne sont connues qu'à la réponse backend.
     } else {
       toast(describeError(err), 'err');
     }
   }
+}
+
+/** Annule le dernier lot validé : ajustement négatif du stock par produit. */
+async function undoCourses() {
+  const last = store.getLastCourses();
+  if (!last || !last.reverse || !last.reverse.length) return;
+  try {
+    await Promise.all(last.reverse.map((r) => adjustStock(r.produit_id, -Number(r.portions) || 0)));
+    store.clearLastCourses();
+    M = null;
+    toast('Dernières courses annulées', 'ok');
+    renderCoursesScreen();          // recharge : les articles annulés réapparaissent
+  } catch (err) {
+    if (isOffline(err)) {
+      last.reverse.forEach((r) => store.enqueue({ action: 'log', type: 'ajustement', ref: r.produit_id, delta: -Number(r.portions) || 0 }));
+      store.clearLastCourses();
+      toast('Hors-ligne — annulation mise en file', 'err');
+      renderCoursesScreen();
+    } else {
+      toast(describeError(err), 'err');
+    }
+  }
+}
+
+/** « Ne plus proposer » : masquage local réversible (aucun appel backend). */
+function exclureCourse(id, nom) {
+  store.addCoursesExclus(id, nom);
+  const d = store.getCoursesDraft();
+  delete d.checked[id]; delete d.qty[id];
+  store.setCoursesDraft(d);
+  toast(`« ${nom} » retiré des courses`, 'ok');
 }
 
 /* ------------------------------------------------------------------ */

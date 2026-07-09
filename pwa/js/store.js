@@ -54,6 +54,31 @@ export const store = {
     return list;
   },
 
+  // --- Brouillon de courses (cases cochées + quantités ajustées, persisté) ---
+  getCoursesDraft() {
+    const d = readJSON(KEY.draft, null);
+    return d && typeof d === 'object' ? { checked: d.checked || {}, qty: d.qty || {} } : { checked: {}, qty: {} };
+  },
+  setCoursesDraft(d) { write(KEY.draft, JSON.stringify(d || { checked: {}, qty: {} })); },
+
+  // --- Articles retirés (« ne plus proposer », masquage local réversible) ---
+  getCoursesExclus() { return readJSON(KEY.exclus, []); },
+  addCoursesExclus(id, nom) {
+    const list = this.getCoursesExclus();
+    if (!list.some((x) => x.id === id)) { list.push({ id, nom: nom || id }); write(KEY.exclus, JSON.stringify(list)); }
+    return list;
+  },
+  removeCoursesExclus(id) {
+    const list = this.getCoursesExclus().filter((x) => x.id !== id);
+    write(KEY.exclus, JSON.stringify(list));
+    return list;
+  },
+
+  // --- Dernier lot de courses validé (pour annulation) ---
+  getLastCourses() { return readJSON(KEY.last, null); },
+  setLastCourses(batch) { write(KEY.last, JSON.stringify(batch)); },
+  clearLastCourses() { try { localStorage.removeItem(KEY.last); } catch { /* mode privé */ } },
+
   // --- File de log offline (rejouée au retour réseau) ---
   getQueue() { return readJSON(KEY.queue, []); },
   enqueue(payload) {

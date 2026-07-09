@@ -40,7 +40,14 @@ export async function apiGet(action, params = {}) {
 // Corps en text/plain (JSON.stringify) pour éviter le pre-flight CORS ; le
 // backend parse postData.contents (BUILD-PWA.md §1).
 export async function apiPost(body) {
-  if (IS_DEMO) return { demo: true, ...body };
+  if (IS_DEMO) {
+    // Écho suffisant pour l'UI ; pour les courses on simule la réponse backend
+    // (portions ajoutées) afin que l'annulation fonctionne aussi en démo.
+    if (body && body.type === 'courses') {
+      return { courses_validees: (body.items || []).map((i) => ({ produit_id: i.produit_id, portions: Number(i.unites) || 0 })) };
+    }
+    return { demo: true, ...body };
+  }
   const token = store.getToken();
   if (!token) throw new ApiError('Token manquant', 'noauth');
   let res;
@@ -74,5 +81,6 @@ async function demoData(action) {
   }
   const map = { state: _demoCache.state, catalog: _demoCache.catalog, courses: _demoCache.courses };
   if (!(action in map)) throw new ApiError('Action démo inconnue : ' + action, 'backend');
-  return map[action];
+  // Copie profonde : l'UI peut muter l'objet (retrait optimiste) sans corrompre la fixture.
+  return JSON.parse(JSON.stringify(map[action]));
 }

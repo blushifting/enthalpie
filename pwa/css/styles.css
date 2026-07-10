@@ -80,6 +80,25 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .iconbtn:active { background: var(--surface-2); }
 
+/* Badge « actions en attente de synchro » (rejeu de la file offline) */
+.queue-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 42px; padding: 0 11px; border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  color: var(--accent); font-size: 13px; font-weight: 650;
+  transition: background .12s ease;
+}
+.queue-badge[hidden] { display: none; }
+.queue-badge:active { background: color-mix(in srgb, var(--accent) 24%, var(--surface)); }
+.queue-badge__ico { font-size: 15px; }
+/* Hors-ligne : la file ne part pas maintenant → teinte d'attente (ambre) */
+.queue-badge.is-offline {
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+  color: var(--warn);
+}
+
 /* ---------- Zone écran ---------- */
 .screen {
   flex: 1;

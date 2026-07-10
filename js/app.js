@@ -1,10 +1,11 @@
 // Bootstrap : shell, navigation, gate token, chargement state+catalog, handlers.
 import { h, $, clear, toast } from './util.js';
 import { store } from './store.js';
-import { getState, getCatalog, getCourses, logProduit, logPlat, adjustStock, logCourses, ApiError, IS_DEMO } from './api.js';
+import { getState, getCatalog, getCourses, logProduit, logPlat, adjustStock, logCourses, logPotFini, addProduit, ApiError, IS_DEMO } from './api.js';
 import { renderToday } from './today.js';
 import { renderCourses } from './courses.js';
 import { openQuoiManger } from './quoimanger.js';
+import { openScan } from './scan.js';
 import { flushQueue, updateQueueBadge, registerServiceWorker } from './sync.js';
 import { DEFAULT_API_BASE, CRENEAUX } from './config.js';
 
@@ -34,6 +35,7 @@ function buildModel(state, catalog) {
     id: pr.id,
     nom: pr.nom,
     kind: 'produit',
+    ean: String(pr.ean || '').replace(/\D/g, ''),
     macros: { kcal: Number(pr.kcal) || 0, prot_g: Number(pr.prot_g) || 0, fer_mg: Number(pr.fer_mg) || 0 },
     stock: Number(stock[pr.id]) || 0,
     portions_par_unite: Number(pr.portions_par_unite) || 1,
@@ -294,6 +296,62 @@ function isOffline(err) {
   return err instanceof ApiError && (err.kind === 'network' || err.kind === 'http');
 }
 
+/* ------------------------------------------------------------------ */
+/* Scan code-barres                                                    */
+/* ------------------------------------------------------------------ */
+const scanContext = {
+  findByEan: (ean) => foodByEan(ean),
+  onPotFini: (food) => potFiniAction(food),
+  onAddProduit: (fiche) => addProduitAction(fiche),
+};
+
+/** Retrouve un aliment par EAN dans le modèle courant ou le catalogue en cache. */
+function foodByEan(ean) {
+  const code = String(ean || '').replace(/\D/g, '');
+  if (!code) return null;
+  if (M && M.foods) {
+    const hit = M.foods.find((f) => f.ean && f.ean === code);
+    if (hit) return hit;
+  }
+  const cc = store.getCachedCatalog();
+  const pr = cc && cc.catalog && (cc.catalog.produits || [])
+    .find((p) => String(p.ean || '').replace(/\D/g, '') === code);
+  if (!pr) return null;
+  const cs = store.getCachedState();
+  const st = (M && M.state && M.state.stock) || (cs && cs.state && cs.state.stock) || {};
+  return {
+    id: pr.id, nom: pr.nom, ean: code,
+    macros: { kcal: Number(pr.kcal) || 0, prot_g: Number(pr.prot_g) || 0, fer_mg: Number(pr.fer_mg) || 0 },
+    stock: Number(st[pr.id]) || 0,
+  };
+}
+
+/** « Pot fini » depuis le scan : force le stock à 0 + recalibration backend. */
+async function potFiniAction(food) {
+  const f = M && M.foods && M.foods.find((x) => x.id === food.id);
+  if (f) { f.stock = 0; if (currentScreen === 'today') paint(); }
+  try {
+    await logPotFini(food.id);
+    toast(`${food.nom} — pot fini`, 'ok');
+    M = null; refreshCurrent();
+  } catch (err) {
+    if (isOffline(err)) {
+      enqueue({ action: 'log', type: 'pot_fini', ref: food.id, source: 'scan' });
+      toast('Hors-ligne — « pot fini » mis en file', 'err');
+    } else {
+      toast(describeError(err), 'err');
+      throw err;                 // la feuille de scan réactive son bouton
+    }
+  }
+}
+
+/** Ajout au catalogue depuis une fiche OpenFoodFacts validée. */
+async function addProduitAction(fiche) {
+  const res = await addProduit(fiche);   // l'erreur remonte → la feuille l'affiche
+  M = null; CoursesData = null; refreshCurrent();
+  return res;
+}
+
 /** Recale silencieusement depuis la source de vérité. */
 async function reconcile() {
   try {
@@ -383,7 +441,7 @@ document.querySelectorAll('.tab').forEach((t) =>
   t.addEventListener('click', () => setScreen(t.dataset.screen)));
 
 $('#btn-settings').addEventListener('click', () => openSettings());
-$('#btn-scan').addEventListener('click', () => toast('Scan code-barres — étape suivante du build'));
+$('#btn-scan').addEventListener('click', () => openScan(scanContext));
 fab.addEventListener('click', () => {
   if (M) openQuoiManger(M.state, M.foods, (food) => scrollToFood(food.id));
 });

@@ -30,8 +30,8 @@
   },
   "catalog": {
     "produits": [
-      { "id": "P01", "nom": "Yaourt grec nature", "kcal": 90, "prot_g": 9, "fer_mg": 0.1, "unite_de_vente": "pot 1 kg", "portions_par_unite": 8, "actif": "oui" },
-      { "id": "P02", "nom": "Tofu ferme", "kcal": 120, "prot_g": 14, "fer_mg": 2.7, "unite_de_vente": "bloc 200 g", "portions_par_unite": 2, "actif": "oui" },
+      { "id": "P01", "nom": "Yaourt grec nature", "ean": "3033490004743", "kcal": 90, "prot_g": 9, "fer_mg": 0.1, "unite_de_vente": "pot 1 kg", "portions_par_unite": 8, "flag_gluten": "non", "flag_lactose": "oui", "actif": "oui" },
+      { "id": "P02", "nom": "Tofu ferme", "ean": "3760020507350", "kcal": 120, "prot_g": 14, "fer_mg": 2.7, "unite_de_vente": "bloc 200 g", "portions_par_unite": 2, "flag_gluten": "non", "flag_lactose": "non", "actif": "oui" },
       { "id": "P03", "nom": "Lentilles corail cuites", "kcal": 115, "prot_g": 9, "fer_mg": 3.3, "unite_de_vente": "barquette 250 g", "portions_par_unite": 2, "actif": "oui" },
       { "id": "P04", "nom": "Flocons d'avoine", "kcal": 150, "prot_g": 5, "fer_mg": 1.8, "unite_de_vente": "paquet 500 g", "portions_par_unite": 10, "actif": "oui" },
       { "id": "P05", "nom": "Pois chiches", "kcal": 130, "prot_g": 8, "fer_mg": 2.4, "unite_de_vente": "bocal", "portions_par_unite": 4, "actif": "oui" },
@@ -39,7 +39,7 @@
       { "id": "P07", "nom": "Riz complet", "kcal": 130, "prot_g": 3, "fer_mg": 0.5, "unite_de_vente": "paquet", "portions_par_unite": 12, "actif": "oui" },
       { "id": "P08", "nom": "Œufs", "kcal": 78, "prot_g": 6, "fer_mg": 0.9, "unite_de_vente": "boîte de 6", "portions_par_unite": 6, "denombrable": true, "actif": "oui" },
       { "id": "P09", "nom": "Amandes", "kcal": 160, "prot_g": 6, "fer_mg": 1.1, "unite_de_vente": "sachet 200 g", "portions_par_unite": 8, "actif": "oui" },
-      { "id": "P10", "nom": "Fromage blanc", "kcal": 70, "prot_g": 8, "fer_mg": 0.1, "unite_de_vente": "pot 500 g", "portions_par_unite": 5, "actif": "oui" },
+      { "id": "P10", "nom": "Fromage blanc", "ean": "3033491575434", "kcal": 70, "prot_g": 8, "fer_mg": 0.1, "unite_de_vente": "pot 500 g", "portions_par_unite": 5, "flag_gluten": "non", "flag_lactose": "oui", "actif": "oui" },
       { "id": "P12", "nom": "Pain complet", "kcal": 110, "prot_g": 4, "fer_mg": 1.2, "unite_de_vente": "miche", "portions_par_unite": 10, "actif": "oui" }
     ],
     "plats": []

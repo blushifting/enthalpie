@@ -64,5 +64,31 @@
         { "produit_id": "P06", "nom": "Épinards", "magasin": "Picard", "unites": 2, "unite_de_vente": "sachet 600 g", "portions_manquantes": 3.4 }
       ]
     }
+  },
+  "cuisine": {
+    "recette_semaine": {
+      "recette_id": "R02", "plat_id": "M02", "nom": "Dahl lentilles-épinards",
+      "macros": { "kcal": 480, "prot_g": 24, "fer_mg": 6.2 },
+      "portions_produites": 4, "stock_portions": 0,
+      "instructions": "Faire revenir oignon + ail, ajouter les lentilles corail, curcuma et lait de coco, mijoter 20 min. Incorporer les épinards en fin de cuisson. Répartir en 4 portions.",
+      "nouveau": false, "derniere_realisation": "2026-06-26"
+    },
+    "bibliotheque": [
+      { "recette_id": "R01", "plat_id": "M01", "nom": "Bowl tofu-brocolis-riz", "type": "batch", "macros": { "kcal": 540, "prot_g": 32, "fer_mg": 4.8 }, "portions_produites": 4, "instructions": "Cuire le riz complet. Rôtir le tofu mariné (sauce soja + sésame) et les brocolis 20 min à 200 °C. Assembler en 4 bols.", "stock_portions": 2, "derniere_realisation": "2026-07-05", "jamais_cuisinee": false },
+      { "recette_id": "R02", "plat_id": "M02", "nom": "Dahl lentilles-épinards", "type": "batch", "macros": { "kcal": 480, "prot_g": 24, "fer_mg": 6.2 }, "portions_produites": 4, "instructions": "Faire revenir oignon + ail, ajouter les lentilles corail, curcuma et lait de coco, mijoter 20 min. Incorporer les épinards en fin de cuisson.", "stock_portions": 0, "derniere_realisation": "2026-06-26", "jamais_cuisinee": false },
+      { "recette_id": "R03", "plat_id": "M05", "nom": "Chili sin carne", "type": "batch", "macros": { "kcal": 510, "prot_g": 27, "fer_mg": 5.5 }, "portions_produites": 5, "instructions": "Haricots rouges, tomates concassées, maïs, poivrons et épices chili. Mijoter 30 min. Répartir en 5 portions.", "stock_portions": 0, "derniere_realisation": "", "jamais_cuisinee": true }
+    ],
+    "stats": { "recettes_essayees": 2, "recettes_adoptees": 1, "calibration_jours": 3, "streak_prot": 3 }
+  },
+  "bilan": {
+    "cibles": { "kcal": 2850, "prot_g": 110, "fer_mg": 0 },
+    "tolerances": { "kcal": 200, "prot_g": 10 },
+    "semaines": [
+      { "debut": "2026-06-17", "fin": "2026-06-23", "label": "S-3", "jours_ecoules": 7, "jours_avec_donnees": 7, "moyennes": { "kcal": 2610, "prot_g": 96, "fer_mg": 11.2 } },
+      { "debut": "2026-06-24", "fin": "2026-06-30", "label": "S-2", "jours_ecoules": 7, "jours_avec_donnees": 7, "moyennes": { "kcal": 2740, "prot_g": 104, "fer_mg": 12.5 } },
+      { "debut": "2026-07-01", "fin": "2026-07-07", "label": "S-1", "jours_ecoules": 7, "jours_avec_donnees": 7, "moyennes": { "kcal": 2880, "prot_g": 112, "fer_mg": 13.1 } },
+      { "debut": "2026-07-08", "fin": "2026-07-14", "label": "Cette sem.", "jours_ecoules": 3, "jours_avec_donnees": 3, "moyennes": { "kcal": 2790, "prot_g": 108, "fer_mg": 12.0 } }
+    ],
+    "streak_prot": 3
   }
 }

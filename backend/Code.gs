@@ -10,6 +10,8 @@
  *   GET  ?token=…&action=state          → jauges du jour, pools par créneau, stock
  *   GET  ?token=…&action=catalog        → produits + plats actifs
  *   GET  ?token=…&action=courses        → liste de courses (par magasin/rayon)
+ *   GET  ?token=…&action=cuisine        → recette de la semaine + biblio batch + compteurs
+ *   GET  ?token=…&action=bilan          → moyennes hebdo prot/fer/kcal vs cibles (4 sem.)
  *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement
  *   POST {token, action:'cloture'}      → clôture médiane du jour (aussi appelable par trigger)
  *
@@ -189,6 +191,8 @@ function handle_(e, p) {
       case 'state':          result = getState_(); break;
       case 'catalog':        result = getCatalog_(); break;
       case 'courses':        result = getCourses_(); break;
+      case 'cuisine':        result = getCuisine_(); break;
+      case 'bilan':          result = getBilan_(); break;
       case 'search_catalog': result = searchCatalog_(p.q); break;
       case 'log':            result = postLog_(p); break;
       case 'add_produit':    result = addProduit_(p); break;
@@ -336,6 +340,171 @@ function getCourses_() {
   lignes.forEach(function (l) { (groupes[l.magasin] = groupes[l.magasin] || []).push(l); });
   return { horizon_jours: horizon, groupes: groupes, lignes: lignes };
 }
+
+/* ===================================================================== */
+/* 6bis. CUISINE + BILAN (SPEC §4.3-4.4, §7)                             */
+/* ===================================================================== */
+
+/**
+ * Écran Cuisine : recette de la semaine (badge nouveau / batch classique),
+ * bibliothèque des recettes batch (« je l'ai cuisinée » = POST batch_cuisine)
+ * et compteurs gamifiés (SPEC §7 : essayées / adoptées, streak protéines,
+ * badge de calibration).
+ */
+function getCuisine_() {
+  var tz = params_().tz || 'Europe/Paris';
+  var platsById = indexBy_(readTable_('plats'), 'id');
+  var stock = stockMap_();
+
+  var biblio = readTable_('recettes').map(function (rec) {
+    var pl = platsById[rec.plat_id] || {};
+    var jamais = !rec.derniere_realisation || String(rec.derniere_realisation).trim() === '';
+    return {
+      recette_id: rec.id,
+      plat_id: rec.plat_id,
+      nom: pl.nom || String(rec.plat_id),
+      type: pl.type || 'batch',
+      macros: macrosOf_(rec.plat_id, platsById),
+      portions_produites: Number(rec.portions_produites) || 0,
+      instructions: String(rec.instructions || ''),
+      stock_portions: round1_(Number(stock[rec.plat_id] || 0)),
+      derniere_realisation: jamais ? '' : formatTs_(rec.derniere_realisation, tz),
+      jamais_cuisinee: jamais
+    };
+  });
+
+  // Compteurs sur le journal (batch_cuisine) : essayée = cuisinée ≥1 ; adoptée = ≥3.
+  var counts = {};
+  readTable_('log').forEach(function (l) {
+    if (l.type === 'batch_cuisine') counts[l.ref] = (counts[l.ref] || 0) + 1;
+  });
+  var essayees = Object.keys(counts).length;
+  var adoptees = Object.keys(counts).filter(function (k) { return counts[k] >= 3; }).length;
+
+  // Badge calibration : jours depuis le dernier « pot fini » scanné (SPEC §7).
+  var dernierPot = null;
+  readTable_('log').forEach(function (l) {
+    if (l.type !== 'pot_fini') return;
+    var ts = tsOf_(l.timestamp);
+    if (dernierPot == null || ts > dernierPot) dernierPot = ts;
+  });
+  var calibrationJours = dernierPot == null ? null : Math.floor((Date.now() - dernierPot) / 86400000);
+
+  // Recette de la semaine : override paramétré (posé par la routine hebdo §9) sinon
+  // repli déterministe = recette cuisinée il y a le plus longtemps (jamais → priorité).
+  var override = trim_(params_().recette_semaine || '');
+  var vedette = null;
+  if (override) {
+    biblio.forEach(function (r) { if (!vedette && (r.recette_id === override || r.plat_id === override)) vedette = r; });
+  }
+  if (!vedette && biblio.length) {
+    vedette = biblio.slice().sort(function (a, b) {
+      if (a.jamais_cuisinee !== b.jamais_cuisinee) return a.jamais_cuisinee ? -1 : 1;
+      return String(a.derniere_realisation).localeCompare(String(b.derniere_realisation));
+    })[0];
+  }
+  var recetteSemaine = vedette ? {
+    recette_id: vedette.recette_id, plat_id: vedette.plat_id, nom: vedette.nom,
+    macros: vedette.macros, portions_produites: vedette.portions_produites,
+    instructions: vedette.instructions, stock_portions: vedette.stock_portions,
+    nouveau: vedette.jamais_cuisinee, derniere_realisation: vedette.derniere_realisation
+  } : null;
+
+  var hebdo = moyennesHebdo_(tz, 4);
+  return {
+    recette_semaine: recetteSemaine,
+    bibliotheque: biblio,
+    stats: {
+      recettes_essayees: essayees,
+      recettes_adoptees: adoptees,
+      calibration_jours: calibrationJours,
+      streak_prot: hebdo.streak_prot
+    }
+  };
+}
+
+/** Bilan 4 semaines glissantes : moyennes journalières prot/fer/kcal vs cibles (SPEC §4.4). */
+function getBilan_() {
+  return moyennesHebdo_(params_().tz || 'Europe/Paris', 4);
+}
+
+/** Apports journaliers reconstruits du journal : plats (médian inclus) + produits bruts. */
+function intakeParJour_(tz) {
+  var platsById = indexBy_(readTable_('plats'), 'id');
+  var produitsById = indexBy_(readTable_('produits'), 'id');
+  var parJour = {};
+  readTable_('log').forEach(function (l) {
+    var m = null;
+    if (l.type === 'plat') m = macrosOf_(l.ref, platsById);
+    else if (l.type === 'produit') m = macrosProduit_(l.ref, produitsById);
+    else return;
+    var q = Number(l.quantite) || 1;
+    var day = formatTs_(l.timestamp, tz);
+    var b = parJour[day] || (parJour[day] = { kcal: 0, prot_g: 0, fer_mg: 0 });
+    b.kcal += m.kcal * q; b.prot_g += m.prot_g * q; b.fer_mg += m.fer_mg * q;
+  });
+  return parJour;
+}
+
+/**
+ * Moyennes journalières par semaine glissante (nb semaines de 7 j finissant
+ * aujourd'hui), du plus ancien au plus récent, + cibles/tolérances + streak
+ * protéines (nb de semaines récentes consécutives dans la fenêtre prot). La
+ * semaine courante est partielle : on divise par les jours écoulés, pas 7.
+ */
+function moyennesHebdo_(tz, nb) {
+  var parJour = intakeParJour_(tz);
+  var obj = objectifs_();
+  var JOURS = 7;
+  var today = new Date(Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd') + 'T12:00:00');
+  var semaines = [];
+  for (var w = nb - 1; w >= 0; w--) {
+    var fin = new Date(today.getTime() - w * JOURS * 86400000);
+    var debut = new Date(fin.getTime() - (JOURS - 1) * 86400000);
+    var somme = { kcal: 0, prot_g: 0, fer_mg: 0 };
+    var joursEcoules = 0, joursAvecDonnees = 0;
+    for (var d = 0; d < JOURS; d++) {
+      var jour = new Date(debut.getTime() + d * 86400000);
+      if (jour.getTime() > today.getTime()) break;   // futur (semaine courante partielle)
+      joursEcoules++;
+      var b = parJour[Utilities.formatDate(jour, tz, 'yyyy-MM-dd')];
+      if (b) { somme.kcal += b.kcal; somme.prot_g += b.prot_g; somme.fer_mg += b.fer_mg; joursAvecDonnees++; }
+    }
+    var denom = joursEcoules || 1;
+    semaines.push({
+      debut: Utilities.formatDate(debut, tz, 'yyyy-MM-dd'),
+      fin: Utilities.formatDate(fin, tz, 'yyyy-MM-dd'),
+      label: w === 0 ? 'Cette sem.' : 'S-' + w,
+      jours_ecoules: joursEcoules,
+      jours_avec_donnees: joursAvecDonnees,
+      moyennes: {
+        kcal: round1_(somme.kcal / denom),
+        prot_g: round1_(somme.prot_g / denom),
+        fer_mg: round1_(somme.fer_mg / denom)
+      }
+    });
+  }
+
+  var cibleProt = Number(obj.prot_g_jour) || 0;
+  var tolProt = Number(obj.tol_prot) || 0;
+  var streak = 0;
+  if (cibleProt > 0) {
+    for (var i = semaines.length - 1; i >= 0; i--) {
+      if (semaines[i].jours_avec_donnees > 0 && semaines[i].moyennes.prot_g >= cibleProt - tolProt) streak++;
+      else break;
+    }
+  }
+
+  return {
+    cibles: { kcal: Number(obj.kcal_jour) || 0, prot_g: cibleProt, fer_mg: Number(obj.fer_mg_jour) || 0 },
+    tolerances: { kcal: Number(obj.tol_kcal) || 0, prot_g: tolProt },
+    semaines: semaines,
+    streak_prot: streak
+  };
+}
+
+/** Timestamp (Date ou chaîne) → ms epoch. */
+function tsOf_(ts) { return ts instanceof Date ? ts.getTime() : new Date(ts).getTime(); }
 
 /* ===================================================================== */
 /* 7. ÉCRITURES (POST)                                                    */

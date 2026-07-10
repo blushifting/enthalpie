@@ -11,6 +11,8 @@ export const KEY = {
   state:   'enthalpie.state.cache',
   catalog: 'enthalpie.catalog.cache',
   courses: 'enthalpie.courses.cache',
+  cuisine: 'enthalpie.cuisine.cache',
+  bilan:   'enthalpie.bilan.cache',
   manual:  'enthalpie.courses.manual',   // ajouts manuels (texte libre)
   draft:   'enthalpie.courses.draft',    // cases cochées + quantités ajustées
   exclus:  'enthalpie.courses.exclus',   // articles « ne plus proposer »

@@ -1,9 +1,11 @@
 // Bootstrap : shell, navigation, gate token, chargement state+catalog, handlers.
-import { h, $, clear, toast } from './util.js';
+import { h, $, clear, toast, num } from './util.js';
 import { store } from './store.js';
-import { getState, getCatalog, getCourses, logProduit, logPlat, adjustStock, logCourses, logPotFini, addProduit, ApiError, IS_DEMO } from './api.js';
+import { getState, getCatalog, getCourses, getCuisine, getBilan, logProduit, logPlat, adjustStock, logCourses, logPotFini, logBatch, addProduit, ApiError, IS_DEMO } from './api.js';
 import { renderToday } from './today.js';
 import { renderCourses } from './courses.js';
+import { renderCuisine } from './cuisine.js';
+import { renderBilan } from './bilan.js';
 import { openQuoiManger } from './quoimanger.js';
 import { openScan } from './scan.js';
 import { flushQueue, updateQueueBadge, registerServiceWorker } from './sync.js';
@@ -16,6 +18,7 @@ const fab = $('#btn-quoi-manger');
 let currentScreen = 'today';
 let M = null; // modèle courant { state, foods, plats }
 let CoursesData = null; // dernière liste de courses chargée
+let CuisineData = null; // dernière cuisine chargée (recette semaine + biblio)
 
 /** Met une action en file offline + rafraîchit le badge « en attente ». */
 function enqueue(payload) { store.enqueue(payload); updateQueueBadge(); }
@@ -24,6 +27,8 @@ function enqueue(payload) { store.enqueue(payload); updateQueueBadge(); }
 function refreshCurrent() {
   if (currentScreen === 'today') renderTodayScreen();
   else if (currentScreen === 'courses') renderCoursesScreen();
+  else if (currentScreen === 'cuisine') renderCuisineScreen();
+  else if (currentScreen === 'bilan') renderBilanScreen();
 }
 
 /* ------------------------------------------------------------------ */
@@ -61,17 +66,13 @@ function setScreen(name) {
   document.querySelectorAll('.tab').forEach((t) =>
     t.classList.toggle('is-active', t.dataset.screen === name));
   fab.hidden = name !== 'today';
-  if (name === 'today') renderTodayScreen();
-  else if (name === 'courses') renderCoursesScreen();
-  else renderPlaceholder(name);
-}
-
-function renderPlaceholder(name) {
-  const titles = { cuisine: '🍳 Cuisine', bilan: '📈 Bilan' };
-  clear(appEl);
-  appEl.append(h('div', { class: 'placeholder-screen' },
-    h('h2', {}, titles[name] || name),
-    h('p', {}, 'Écran à venir — prochaine étape du build.')));
+  const render = {
+    today: renderTodayScreen,
+    courses: renderCoursesScreen,
+    cuisine: renderCuisineScreen,
+    bilan: renderBilanScreen,
+  }[name] || renderTodayScreen;
+  render();
 }
 
 /* ------------------------------------------------------------------ */
@@ -222,6 +223,93 @@ function exclureCourse(id, nom) {
   delete d.checked[id]; delete d.qty[id];
   store.setCoursesDraft(d);
   toast(`« ${nom} » retiré des courses`, 'ok');
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran Cuisine                                                       */
+/* ------------------------------------------------------------------ */
+const cuisineHandlers = { onCuisiner: (rec) => cuisinerBatch(rec) };
+
+async function renderCuisineScreen() {
+  if (!IS_DEMO && !store.hasToken()) { openSettings({ force: true }); return; }
+  loadingMsg('Chargement de la cuisine…');
+  try {
+    const data = await getCuisine();
+    CuisineData = data;
+    store.cacheCuisine(data);
+    renderCuisine(appEl, data, cuisineHandlers);
+  } catch (err) {
+    const cc = store.getCachedCuisine();
+    if (cc && cc.cuisine) {
+      CuisineData = cc.cuisine;
+      renderCuisine(appEl, { ...cc.cuisine, __offline: true }, cuisineHandlers);
+      toast('Hors-ligne — dernière cuisine connue', 'err');
+    } else if (err instanceof ApiError && err.kind === 'noauth') {
+      openSettings({ force: true });
+    } else if (currentScreen === 'cuisine') {
+      errorState(describeError(err), renderCuisineScreen);
+    }
+  }
+}
+
+/** « Je l'ai cuisinée » : POST batch_cuisine (+stock du plat batch). */
+async function cuisinerBatch(rec) {
+  const ref = rec.recette_id || rec.plat_id;
+  const portions = Number(rec.portions_produites) || 0;
+  try {
+    await logBatch(ref);
+    const label = portions ? `+${num(portions)} portion${portions > 1 ? 's' : ''}` : 'cuisiné';
+    toast(`${rec.nom} — ${label}`, 'ok');
+    M = null;                                 // le stock du plat batch a changé → Aujourd'hui se rechargera
+    if (IS_DEMO) { bumpCuisineLocal(rec, portions); renderCuisine(appEl, CuisineData, cuisineHandlers); }
+    else renderCuisineScreen();               // recharge la vérité backend (stock, dernière réalisation, compteurs)
+  } catch (err) {
+    if (isOffline(err)) {
+      enqueue({ action: 'log', type: 'batch_cuisine', ref });
+      toast('Hors-ligne — cuisine mise en file', 'err');
+    } else {
+      toast(describeError(err), 'err');
+      renderCuisine(appEl, CuisineData, cuisineHandlers);   // réactive le bouton désactivé
+    }
+  }
+}
+
+/** Reflet optimiste local (démo : la fixture est statique, on simule le +stock). */
+function bumpCuisineLocal(rec, portions) {
+  if (!CuisineData) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const bump = (r) => {
+    if (!r) return;
+    r.stock_portions = Math.round(((Number(r.stock_portions) || 0) + portions) * 10) / 10;
+    r.derniere_realisation = today;
+    r.jamais_cuisinee = false; r.nouveau = false;
+  };
+  const rs = CuisineData.recette_semaine;
+  if (rs && rs.recette_id === rec.recette_id) bump(rs);
+  (CuisineData.bibliotheque || []).forEach((r) => { if (r.recette_id === rec.recette_id) bump(r); });
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran Bilan (lecture seule)                                         */
+/* ------------------------------------------------------------------ */
+async function renderBilanScreen() {
+  if (!IS_DEMO && !store.hasToken()) { openSettings({ force: true }); return; }
+  loadingMsg('Chargement du bilan…');
+  try {
+    const data = await getBilan();
+    store.cacheBilan(data);
+    renderBilan(appEl, data);
+  } catch (err) {
+    const cb = store.getCachedBilan();
+    if (cb && cb.bilan) {
+      renderBilan(appEl, { ...cb.bilan, __offline: true });
+      toast('Hors-ligne — dernier bilan connu', 'err');
+    } else if (err instanceof ApiError && err.kind === 'noauth') {
+      openSettings({ force: true });
+    } else if (currentScreen === 'bilan') {
+      errorState(describeError(err), renderBilanScreen);
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */

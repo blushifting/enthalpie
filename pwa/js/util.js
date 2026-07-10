@@ -30,6 +30,14 @@ export function num(n) {
   return Number.isInteger(v) ? String(v) : v.toFixed(1).replace(/\.0$/, '');
 }
 
+const MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+/** 'yyyy-MM-dd' → '26 juin' (chaîne vide si non parsable). */
+export function frDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  if (!m) return '';
+  return `${Number(m[3])} ${MOIS[Number(m[2]) - 1] || ''}`.trim();
+}
+
 /** Macros compactes d'un plat -> tableau de fragments {label,value}. */
 export function macroChips(m = {}) {
   const chips = [];

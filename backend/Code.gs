@@ -186,11 +186,13 @@ function handle_(e, p) {
     var action = p.action || 'state';
     var result;
     switch (action) {
-      case 'state':   result = getState_(); break;
-      case 'catalog': result = getCatalog_(); break;
-      case 'courses': result = getCourses_(); break;
-      case 'log':     result = postLog_(p); break;
-      case 'cloture': result = clotureMediane_(p.date); break;
+      case 'state':          result = getState_(); break;
+      case 'catalog':        result = getCatalog_(); break;
+      case 'courses':        result = getCourses_(); break;
+      case 'search_catalog': result = searchCatalog_(p.q); break;
+      case 'log':            result = postLog_(p); break;
+      case 'add_produit':    result = addProduit_(p); break;
+      case 'cloture':        result = clotureMediane_(p.date); break;
       default: throw new Error('Action inconnue : ' + action);
     }
     return json_({ ok: true, action: action, data: result });
@@ -272,6 +274,17 @@ function getCatalog_() {
     produits: readTable_('produits').filter(actif_),
     plats: readTable_('plats').filter(actif_)
   };
+}
+
+/** Recherche catalogue (tuile « ➕ autre » / scan) : produits actifs par nom ou EAN. */
+function searchCatalog_(q) {
+  var query = trim_(q || '').toLowerCase();
+  var res = readTable_('produits').filter(actif_).filter(function (pr) {
+    if (!query) return true;
+    return String(pr.nom).toLowerCase().indexOf(query) !== -1 ||
+           String(pr.ean).indexOf(query) !== -1;
+  }).slice(0, 20).map(publicProduit_);
+  return { produits: res };
 }
 
 /* ===================================================================== */
@@ -444,6 +457,84 @@ function coursesValidees_(p, now) {
   });
   appendRow_('log', { timestamp: now, type: 'courses', ref: '', quantite: ajouts.length, source: p.source || 'tap' });
   return { courses_validees: ajouts };
+}
+
+/**
+ * Ajout d'un produit au catalogue depuis un scan (fiche OpenFoodFacts validée
+ * dans la PWA). Idempotent sur l'EAN : rescanner un EAN déjà connu renvoie le
+ * produit existant sans créer de doublon. Génère l'id (P + n° suivant).
+ * Corps attendu : { action:'add_produit', produit:{ nom, ean, kcal, prot_g,
+ *   fer_mg, unite_de_vente, portions_par_unite, flag_gluten, flag_lactose,
+ *   marque_magasin?, perissable_jours?, stock_initial? } }
+ */
+function addProduit_(p) {
+  var f = p.produit || p; // accepte {produit:{…}} ou champs à plat
+  var nom = trim_(f.nom || '');
+  if (!nom) throw new Error('nom requis pour ajouter un produit.');
+  var ean = String(f.ean == null ? '' : f.ean).replace(/\D/g, '');
+
+  var produits = readTable_('produits');
+  // Idempotence : un EAN déjà présent renvoie le produit existant.
+  if (ean) {
+    var exist = null;
+    produits.forEach(function (pr) {
+      if (String(pr.ean).replace(/\D/g, '') === ean) exist = pr;
+    });
+    if (exist) return { produit: publicProduit_(exist), existe_deja: true };
+  }
+
+  var id = nextProduitId_(produits);
+  appendRow_('produits', {
+    id: id, nom: nom,
+    marque_magasin: trim_(f.marque_magasin || f.marque || ''),
+    ean: ean,
+    unite_de_vente: trim_(f.unite_de_vente || ''),
+    portions_par_unite: Number(f.portions_par_unite) || 1,
+    kcal: Number(f.kcal) || 0,
+    prot_g: Number(f.prot_g) || 0,
+    fer_mg: Number(f.fer_mg) || 0,
+    flag_gluten: normFlag_(f.flag_gluten),
+    flag_lactose: normFlag_(f.flag_lactose),
+    perissable_jours: (f.perissable_jours === '' || f.perissable_jours == null) ? '' : Number(f.perissable_jours),
+    actif: 'oui'
+  });
+
+  // Stock initial optionnel (portions) ; 0 par défaut : on scanne souvent un
+  // contenant déjà entamé/fini, le réappro passe par « courses ».
+  var stock0 = Number(f.stock_initial);
+  if (stock0 > 0) setStock_(id, stock0);
+
+  appendRow_('log', { timestamp: new Date(), type: 'add_produit', ref: id, quantite: 1, source: p.source || 'scan' });
+  return { produit: publicProduit_(indexBy_(readTable_('produits'), 'id')[id]) };
+}
+
+/** Prochain id produit disponible : P + (max numérique + 1), zéro-paddé sur 2. */
+function nextProduitId_(produits) {
+  var max = 0;
+  produits.forEach(function (pr) {
+    var m = /^P0*(\d+)$/.exec(String(pr.id).trim());
+    if (m) max = Math.max(max, Number(m[1]));
+  });
+  var n = max + 1;
+  return 'P' + (n < 10 ? '0' + n : String(n));
+}
+
+/** Normalise un flag oui/non (défaut : chaîne vide = inconnu). */
+function normFlag_(v) {
+  var s = String(v == null ? '' : v).toLowerCase();
+  if (s === 'oui' || s === 'true' || s === '1' || s === 'yes') return 'oui';
+  if (s === '') return '';
+  return 'non';
+}
+
+/** Vue publique d'un produit (sous-ensemble utile à la PWA). */
+function publicProduit_(pr) {
+  return {
+    id: pr.id, nom: pr.nom,
+    kcal: Number(pr.kcal) || 0, prot_g: Number(pr.prot_g) || 0, fer_mg: Number(pr.fer_mg) || 0,
+    unite_de_vente: pr.unite_de_vente, portions_par_unite: Number(pr.portions_par_unite) || 1,
+    ean: String(pr.ean || ''), actif: pr.actif
+  };
 }
 
 /** Ajustement manuel de stock (secours). */

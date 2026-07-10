@@ -5,6 +5,7 @@ import { getState, getCatalog, getCourses, logProduit, logPlat, adjustStock, log
 import { renderToday } from './today.js';
 import { renderCourses } from './courses.js';
 import { openQuoiManger } from './quoimanger.js';
+import { flushQueue, updateQueueBadge, registerServiceWorker } from './sync.js';
 import { DEFAULT_API_BASE, CRENEAUX } from './config.js';
 
 const appEl = $('#app');
@@ -14,6 +15,15 @@ const fab = $('#btn-quoi-manger');
 let currentScreen = 'today';
 let M = null; // modèle courant { state, foods, plats }
 let CoursesData = null; // dernière liste de courses chargée
+
+/** Met une action en file offline + rafraîchit le badge « en attente ». */
+function enqueue(payload) { store.enqueue(payload); updateQueueBadge(); }
+
+/** Recharge l'écran courant (après synchro d'une file rejouée, retour réseau…). */
+function refreshCurrent() {
+  if (currentScreen === 'today') renderTodayScreen();
+  else if (currentScreen === 'courses') renderCoursesScreen();
+}
 
 /* ------------------------------------------------------------------ */
 /* Construction du modèle produit-centrique                            */
@@ -172,7 +182,7 @@ async function validerCourses(items) {
     if (currentScreen === 'courses') renderCourses(appEl, CoursesData, coursesHandlers); // affiche le bandeau d'annulation
   } catch (err) {
     if (isOffline(err)) {
-      store.enqueue({ action: 'log', type: 'courses', items });
+      enqueue({ action: 'log', type: 'courses', items });
       toast('Hors-ligne — validation mise en file', 'err');
       // Pas d'annulation hors-ligne : les portions exactes ne sont connues qu'à la réponse backend.
     } else {
@@ -193,7 +203,7 @@ async function undoCourses() {
     renderCoursesScreen();          // recharge : les articles annulés réapparaissent
   } catch (err) {
     if (isOffline(err)) {
-      last.reverse.forEach((r) => store.enqueue({ action: 'log', type: 'ajustement', ref: r.produit_id, delta: -Number(r.portions) || 0 }));
+      last.reverse.forEach((r) => enqueue({ action: 'log', type: 'ajustement', ref: r.produit_id, delta: -Number(r.portions) || 0 }));
       store.clearLastCourses();
       toast('Hors-ligne — annulation mise en file', 'err');
       renderCoursesScreen();
@@ -248,7 +258,7 @@ async function commitChanges(changes) {
   } else if (failed.every((r) => isOffline(r.reason))) {
     changes.forEach((c, i) => {
       if (results[i].status === 'rejected') {
-        store.enqueue(c.delta > 0
+        enqueue(c.delta > 0
           ? { action: 'log', type: 'produit', ref: c.ref, quantite: c.delta }
           : { action: 'log', type: 'ajustement', ref: c.ref, delta: -c.delta });
       }
@@ -271,7 +281,7 @@ async function logPlatAction(plat) {
     reconcile();
   } catch (err) {
     if (isOffline(err)) {
-      store.enqueue({ action: 'log', type: 'plat', ref: plat.id });
+      enqueue({ action: 'log', type: 'plat', ref: plat.id });
       toast('Hors-ligne — action mise en file', 'err');
     } else {
       M = snapshot; paint();
@@ -378,6 +388,16 @@ fab.addEventListener('click', () => {
   if (M) openQuoiManger(M.state, M.foods, (food) => scrollToFood(food.id));
 });
 
+// Badge « en attente » : rejeu manuel de la file (utile si l'event `online` a raté).
+$('#queue-badge').addEventListener('click', () => syncQueue({ silent: false }));
+
+/** Rejoue la file offline ; si des actions sont parties, le backend a changé → recharge. */
+async function syncQueue(opts) {
+  const res = await flushQueue(opts);
+  if (res.sent) { M = null; CoursesData = null; refreshCurrent(); }
+  return res;
+}
+
 /** Fait défiler jusqu'à la ligne d'un aliment et la fait clignoter (depuis « Quoi manger ? »). */
 function scrollToFood(id) {
   const el = document.getElementById(`food-${id}`);
@@ -389,9 +409,15 @@ function scrollToFood(id) {
   setTimeout(() => el.classList.remove('flash'), 1500);
 }
 
-window.addEventListener('online', () => {
-  if (currentScreen === 'today') renderTodayScreen();
-  else if (currentScreen === 'courses') renderCoursesScreen();
+window.addEventListener('online', async () => {
+  updateQueueBadge();
+  const res = await syncQueue({ silent: true });   // rejoue la file au retour réseau
+  if (!res.sent) refreshCurrent();                 // syncQueue a déjà rechargé si des actions sont parties
 });
+window.addEventListener('offline', () => updateQueueBadge());
 
+// Boot : badge, service worker (hors localhost), puis rejeu silencieux de la file.
+updateQueueBadge();
+registerServiceWorker();
 setScreen('today');
+syncQueue({ silent: true });

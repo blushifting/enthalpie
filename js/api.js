@@ -71,12 +71,15 @@ export async function apiPost(body) {
 export const getState   = () => apiGet('state');
 export const getCatalog = () => apiGet('catalog');
 export const getCourses = () => apiGet('courses');
+export const getCuisine = () => apiGet('cuisine');
+export const getBilan   = () => apiGet('bilan');
 export const postLog     = (payload) => apiPost({ action: 'log', ...payload });
 export const logProduit  = (ref, quantite) => postLog({ type: 'produit', ref, quantite });
 export const logPlat     = (ref, quantite = 1) => postLog({ type: 'plat', ref, quantite });
 export const adjustStock = (ref, delta) => postLog({ type: 'ajustement', ref, delta });
 export const logCourses  = (items) => postLog({ type: 'courses', items });
 export const logPotFini  = (ref) => postLog({ type: 'pot_fini', ref, source: 'scan' });
+export const logBatch    = (ref) => postLog({ type: 'batch_cuisine', ref });
 
 // --- Scan : ajout catalogue + recherche (action dédiée, hors "log") ---
 // Nécessitent le redéploiement du backend (endpoints add_produit / search_catalog).
@@ -97,7 +100,8 @@ async function demoData(action, params = {}) {
       !q || String(p.nom).toLowerCase().includes(q) || String(p.ean || '').includes(q));
     return JSON.parse(JSON.stringify({ produits }));
   }
-  const map = { state: _demoCache.state, catalog: _demoCache.catalog, courses: _demoCache.courses };
+  const map = { state: _demoCache.state, catalog: _demoCache.catalog, courses: _demoCache.courses,
+    cuisine: _demoCache.cuisine, bilan: _demoCache.bilan };
   if (!(action in map)) throw new ApiError('Action démo inconnue : ' + action, 'backend');
   // Copie profonde : l'UI peut muter l'objet (retrait optimiste) sans corrompre la fixture.
   return JSON.parse(JSON.stringify(map[action]));

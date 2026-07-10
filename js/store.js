@@ -37,6 +37,14 @@ export const store = {
     write(KEY.courses, JSON.stringify({ at: Date.now(), courses }));
   },
   getCachedCourses() { return readJSON(KEY.courses, null); },
+  cacheCuisine(cuisine) {
+    write(KEY.cuisine, JSON.stringify({ at: Date.now(), cuisine }));
+  },
+  getCachedCuisine() { return readJSON(KEY.cuisine, null); },
+  cacheBilan(bilan) {
+    write(KEY.bilan, JSON.stringify({ at: Date.now(), bilan }));
+  },
+  getCachedBilan() { return readJSON(KEY.bilan, null); },
 
   // --- Ajouts manuels de courses (texte libre, locaux, hors compteurs) ---
   getCoursesManual() { return readJSON(KEY.manual, []); },

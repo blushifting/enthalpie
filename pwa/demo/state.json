@@ -18,14 +18,12 @@
         { "id": "M04", "nom": "Galettes seitan-quinoa", "type": "assemblage", "macros": { "kcal": 520, "prot_g": 34, "fer_mg": 3.6 }, "faisable": false }
       ],
       "collation": [],
-      "diner": [
-        { "id": "S03", "nom": "Resto (normal)", "type": "exterieur", "macros": { "kcal": 800, "prot_g": 25, "fer_mg": 3 }, "faisable": true },
-        { "id": "S04", "nom": "Repas sauté", "type": "exterieur", "macros": { "kcal": 0, "prot_g": 0, "fer_mg": 0 }, "faisable": true }
-      ]
+      "diner": []
     },
     "stock": {
       "P01": 6, "P02": 3, "P03": 5, "P04": 10, "P05": 4,
-      "P06": 3, "P07": 8, "P08": 6, "P09": 4, "P10": 0, "P12": 0
+      "P06": 3, "P07": 8, "P08": 6, "P09": 4, "P10": 0, "P12": 0,
+      "M01": 2
     }
   },
   "catalog": {
@@ -42,7 +40,14 @@
       { "id": "P10", "nom": "Fromage blanc", "ean": "3033491575434", "kcal": 70, "prot_g": 8, "fer_mg": 0.1, "unite_de_vente": "pot 500 g", "portions_par_unite": 5, "flag_gluten": "non", "flag_lactose": "oui", "actif": "oui" },
       { "id": "P12", "nom": "Pain complet", "kcal": 110, "prot_g": 4, "fer_mg": 1.2, "unite_de_vente": "miche", "portions_par_unite": 10, "actif": "oui" }
     ],
-    "plats": []
+    "plats": [
+      { "id": "M01", "nom": "Bowl tofu-brocolis-riz", "type": "batch", "composition": "P02:1,P07:1,P06:1", "kcal": 540, "prot_g": 32, "fer_mg": 4.8, "portions_par_unite": 1, "actif": "oui" },
+      { "id": "M02", "nom": "Dahl lentilles-épinards", "type": "batch", "composition": "P03:1,P06:1", "kcal": 480, "prot_g": 24, "fer_mg": 6.2, "portions_par_unite": 1, "actif": "oui" },
+      { "id": "M05", "nom": "Chili sin carne", "type": "batch", "composition": "P05:1", "kcal": 510, "prot_g": 27, "fer_mg": 5.5, "portions_par_unite": 1, "actif": "oui" },
+      { "id": "S01", "nom": "Resto léger", "type": "exterieur", "kcal": 550, "prot_g": 20, "fer_mg": 2, "actif": "oui" },
+      { "id": "S02", "nom": "Resto normal", "type": "exterieur", "kcal": 800, "prot_g": 25, "fer_mg": 3, "actif": "oui" },
+      { "id": "S03", "nom": "Resto copieux", "type": "exterieur", "kcal": 1100, "prot_g": 35, "fer_mg": 4, "actif": "oui" }
+    ]
   },
   "courses": {
     "horizon_jours": 9,

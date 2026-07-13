@@ -80,6 +80,7 @@ export const adjustStock = (ref, delta) => postLog({ type: 'ajustement', ref, de
 export const logCourses  = (items) => postLog({ type: 'courses', items });
 export const logPotFini  = (ref) => postLog({ type: 'pot_fini', ref, source: 'scan' });
 export const logBatch    = (ref) => postLog({ type: 'batch_cuisine', ref });
+export const logExterieur = (macros) => postLog({ type: 'exterieur', ...macros });
 
 // --- Scan : ajout catalogue + recherche (action dédiée, hors "log") ---
 // Nécessitent le redéploiement du backend (endpoints add_produit / search_catalog).

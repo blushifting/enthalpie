@@ -12,7 +12,7 @@
  *   GET  ?token=…&action=courses        → liste de courses (par magasin/rayon)
  *   GET  ?token=…&action=cuisine        → recette de la semaine + biblio batch + compteurs
  *   GET  ?token=…&action=bilan          → moyennes hebdo prot/fer/kcal vs cibles (4 sem.)
- *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement
+ *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement | exterieur
  *   POST {token, action:'cloture'}      → clôture médiane du jour (aussi appelable par trigger)
  *
  * Conforme à SPEC.md §3 (modèle de données) et §5-6 (moteur / liste).
@@ -36,7 +36,7 @@ var SCHEMA = {
     'id', 'plat_id', 'portions_produites', 'instructions', 'derniere_realisation'
   ],
   log: [
-    'timestamp', 'type', 'ref', 'quantite', 'source'
+    'timestamp', 'type', 'ref', 'quantite', 'source', 'extra'
   ],
   stock: [
     'ref', 'portions'
@@ -237,6 +237,7 @@ function getState_() {
     var m = null;
     if (l.type === 'plat') m = macrosOf_(l.ref, platsById);
     else if (l.type === 'produit') m = macrosProduit_(l.ref, produitsById);
+    else if (l.type === 'exterieur') m = parseExtra_(l.extra);
     else return;
     var q = Number(l.quantite) || 1;
     conso.kcal += m.kcal * q; conso.prot_g += m.prot_g * q; conso.fer_mg += m.fer_mg * q;
@@ -346,10 +347,9 @@ function getCourses_() {
 /* ===================================================================== */
 
 /**
- * Écran Cuisine : recette de la semaine (badge nouveau / batch classique),
- * bibliothèque des recettes batch (« je l'ai cuisinée » = POST batch_cuisine)
- * et compteurs gamifiés (SPEC §7 : essayées / adoptées, streak protéines,
- * badge de calibration).
+ * Écran Cuisine : recette de la semaine (badge nouveau / batch classique) +
+ * bibliothèque des recettes batch (« je l'ai cuisinée » = POST batch_cuisine,
+ * qui transforme ingrédients → portions du plat batch dans le stock).
  */
 function getCuisine_() {
   var tz = params_().tz || 'Europe/Paris';
@@ -373,23 +373,6 @@ function getCuisine_() {
     };
   });
 
-  // Compteurs sur le journal (batch_cuisine) : essayée = cuisinée ≥1 ; adoptée = ≥3.
-  var counts = {};
-  readTable_('log').forEach(function (l) {
-    if (l.type === 'batch_cuisine') counts[l.ref] = (counts[l.ref] || 0) + 1;
-  });
-  var essayees = Object.keys(counts).length;
-  var adoptees = Object.keys(counts).filter(function (k) { return counts[k] >= 3; }).length;
-
-  // Badge calibration : jours depuis le dernier « pot fini » scanné (SPEC §7).
-  var dernierPot = null;
-  readTable_('log').forEach(function (l) {
-    if (l.type !== 'pot_fini') return;
-    var ts = tsOf_(l.timestamp);
-    if (dernierPot == null || ts > dernierPot) dernierPot = ts;
-  });
-  var calibrationJours = dernierPot == null ? null : Math.floor((Date.now() - dernierPot) / 86400000);
-
   // Recette de la semaine : override paramétré (posé par la routine hebdo §9) sinon
   // repli déterministe = recette cuisinée il y a le plus longtemps (jamais → priorité).
   var override = trim_(params_().recette_semaine || '');
@@ -410,16 +393,9 @@ function getCuisine_() {
     nouveau: vedette.jamais_cuisinee, derniere_realisation: vedette.derniere_realisation
   } : null;
 
-  var hebdo = moyennesHebdo_(tz, 4);
   return {
     recette_semaine: recetteSemaine,
-    bibliotheque: biblio,
-    stats: {
-      recettes_essayees: essayees,
-      recettes_adoptees: adoptees,
-      calibration_jours: calibrationJours,
-      streak_prot: hebdo.streak_prot
-    }
+    bibliotheque: biblio
   };
 }
 
@@ -437,6 +413,7 @@ function intakeParJour_(tz) {
     var m = null;
     if (l.type === 'plat') m = macrosOf_(l.ref, platsById);
     else if (l.type === 'produit') m = macrosProduit_(l.ref, produitsById);
+    else if (l.type === 'exterieur') m = parseExtra_(l.extra);
     else return;
     var q = Number(l.quantite) || 1;
     var day = formatTs_(l.timestamp, tz);
@@ -522,6 +499,7 @@ function postLog_(p) {
     case 'batch_cuisine': return batchCuisine_(p, now);
     case 'courses':       return coursesValidees_(p, now);
     case 'ajustement':    return ajustement_(p, now);
+    case 'exterieur':     return exterieur_(p, now);
     default: throw new Error('Type de log inconnu : ' + type);
   }
 }
@@ -602,6 +580,10 @@ function batchCuisine_(p, now) {
   else { platId = p.ref; portions = Number(p.portions) || 0; }
   if (!portions) throw new Error('portions_produites introuvable/nul.');
 
+  // Cuisiner = transformer : − ingrédients (composition × portions produites),
+  // + portions du plat batch dans le stock (ensuite loguables comme un aliment).
+  var pl = indexBy_(readTable_('plats'), 'id')[platId];
+  if (pl) composition_(pl).forEach(function (c) { adjustStock_(c.produit_id, -c.nb_portions * portions); });
   adjustStock_(platId, portions);
   appendRow_('log', { timestamp: now, type: 'batch_cuisine', ref: platId, quantite: portions, source: p.source || 'tap' });
   // Met à jour derniere_realisation pour la rotation des suggestions hebdo
@@ -714,6 +696,30 @@ function ajustement_(p, now) {
   adjustStock_(p.ref, delta);
   appendRow_('log', { timestamp: now, type: 'ajustement', ref: p.ref, quantite: delta, source: p.source || 'manuel' });
   return { ajuste: p.ref, delta: delta };
+}
+
+/**
+ * Repas extérieur (resto, invitation…) : macros libres saisies au curseur dans
+ * la PWA (défaut = preset resto du catalogue, ajustable). Comptent dans les
+ * jauges du jour, SANS toucher au stock (aucun ingrédient consommé). Les macros
+ * sont stockées dans la colonne `extra` du log pour être relues par state/bilan.
+ */
+function exterieur_(p, now) {
+  var macros = { kcal: Number(p.kcal) || 0, prot_g: Number(p.prot_g) || 0, fer_mg: Number(p.fer_mg) || 0 };
+  appendRow_('log', {
+    timestamp: now, type: 'exterieur', ref: p.ref || '', quantite: 1,
+    source: p.source || 'tap', extra: JSON.stringify(macros)
+  });
+  return { exterieur: macros, ref: p.ref || '' };
+}
+
+/** Parse la colonne `extra` d'un log (JSON de macros) → {kcal,prot_g,fer_mg}. */
+function parseExtra_(extra) {
+  if (!extra) return { kcal: 0, prot_g: 0, fer_mg: 0 };
+  try {
+    var o = typeof extra === 'string' ? JSON.parse(extra) : extra;
+    return { kcal: Number(o.kcal) || 0, prot_g: Number(o.prot_g) || 0, fer_mg: Number(o.fer_mg) || 0 };
+  } catch (e) { return { kcal: 0, prot_g: 0, fer_mg: 0 }; }
 }
 
 /* ===================================================================== */
@@ -909,21 +915,32 @@ function platFaisable_(pl, stock) {
   });
 }
 
-/** Conso quotidienne moyenne par produit (portions/j) sur `jours` glissants. */
+/**
+ * Consommation quotidienne moyenne PAR PRODUIT (portions/j) sur `jours` glissants.
+ * Compte tous les événements où un ingrédient quitte le stock :
+ *  - log `produit` (conso au curseur) : le produit lui-même ;
+ *  - log `plat` assemblage : ses ingrédients (composition × quantité) ;
+ *  - log `batch_cuisine` : ses ingrédients (composition × portions produites).
+ * On ignore les plats batch mangés (ils consomment le stock du plat, les
+ * ingrédients ayant déjà été décomptés à la cuisson) et les repas extérieurs.
+ */
 function consoParProduitParJour_(platsById, produitsById, jours) {
   var cutoff = Date.now() - jours * 86400000;
   var totals = {};
+  var add = function (id, n) { totals[id] = (totals[id] || 0) + n; };
   readTable_('log').forEach(function (l) {
-    if (l.type !== 'plat') return;
-    var ts = l.timestamp instanceof Date ? l.timestamp.getTime() : new Date(l.timestamp).getTime();
-    if (ts < cutoff) return;
-    var pl = platsById[l.ref];
-    if (!pl) return;
+    if (tsOf_(l.timestamp) < cutoff) return;
     var q = Number(l.quantite) || 1;
-    if (String(pl.type) === 'batch') return; // conso batch ≠ conso produit brut
-    composition_(pl).forEach(function (c) {
-      totals[c.produit_id] = (totals[c.produit_id] || 0) + c.nb_portions * q;
-    });
+    if (l.type === 'produit') {
+      add(l.ref, q);
+    } else if (l.type === 'batch_cuisine') {
+      var plb = platsById[l.ref];
+      if (plb) composition_(plb).forEach(function (c) { add(c.produit_id, c.nb_portions * q); });
+    } else if (l.type === 'plat') {
+      var pl = platsById[l.ref];
+      if (!pl || String(pl.type) === 'batch') return;   // batch mangé → aucun ingrédient consommé
+      composition_(pl).forEach(function (c) { add(c.produit_id, c.nb_portions * q); });
+    }
   });
   var perDay = {};
   Object.keys(totals).forEach(function (id) { perDay[id] = totals[id] / jours; });

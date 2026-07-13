@@ -3,7 +3,7 @@
 // instantané + mise à jour en arrière-plan) ; réseau direct pour l'API Apps Script
 // et OpenFoodFacts (jamais cachées — la couche localStorage gère déjà le cache métier).
 // Bump CACHE à chaque release pour purger l'ancien app-shell.
-const CACHE = 'enthalpie-shell-v3';
+const CACHE = 'enthalpie-shell-v4';
 
 const SHELL = [
   './',
@@ -22,6 +22,7 @@ const SHELL = [
   './js/courses.js',
   './js/cuisine.js',
   './js/bilan.js',
+  './js/exterieur.js',
   './js/scan.js',
   './icons/icon.svg',
 ];

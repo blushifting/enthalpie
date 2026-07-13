@@ -1,7 +1,7 @@
 // Bootstrap : shell, navigation, gate token, chargement state+catalog, handlers.
 import { h, $, clear, toast, num } from './util.js';
 import { store } from './store.js';
-import { getState, getCatalog, getCourses, getCuisine, getBilan, logProduit, logPlat, adjustStock, logCourses, logPotFini, logBatch, addProduit, ApiError, IS_DEMO } from './api.js';
+import { getState, getCatalog, getCourses, getCuisine, getBilan, logProduit, logPlat, adjustStock, logCourses, logPotFini, logBatch, logExterieur, addProduit, ApiError, IS_DEMO } from './api.js';
 import { renderToday } from './today.js';
 import { renderCourses } from './courses.js';
 import { renderCuisine } from './cuisine.js';
@@ -9,7 +9,7 @@ import { renderBilan } from './bilan.js';
 import { openQuoiManger } from './quoimanger.js';
 import { openScan } from './scan.js';
 import { flushQueue, updateQueueBadge, registerServiceWorker } from './sync.js';
-import { DEFAULT_API_BASE, CRENEAUX } from './config.js';
+import { DEFAULT_API_BASE } from './config.js';
 
 const appEl = $('#app');
 const sheetRoot = $('#sheet-root');
@@ -36,6 +36,8 @@ function refreshCurrent() {
 /* ------------------------------------------------------------------ */
 function buildModel(state, catalog) {
   const stock = state.stock || {};
+  const plats = catalog.plats || [];
+
   const foods = (catalog.produits || []).map((pr) => ({
     id: pr.id,
     nom: pr.nom,
@@ -48,14 +50,26 @@ function buildModel(state, catalog) {
     denombrable: pr.denombrable === true || String(pr.denombrable).toLowerCase() === 'oui',
   }));
 
-  const seen = new Set();
-  const plats = [];
-  for (const c of CRENEAUX) {
-    for (const p of (state.pools && state.pools[c.id]) || []) {
-      if (!seen.has(p.id)) { seen.add(p.id); plats.push(p); }
-    }
+  // Plats batch cuisinés = articles de stock (en portions), au curseur comme le
+  // reste. Manger une portion = log `plat` (décrémente le stock du plat batch).
+  for (const pl of plats) {
+    if (String(pl.type) !== 'batch') continue;
+    const s = Number(stock[pl.id]) || 0;
+    if (s <= 0) continue;                    // pas cuisiné / épuisé → absent de l'inventaire
+    foods.push({
+      id: pl.id, nom: pl.nom, kind: 'plat', ean: '',
+      macros: { kcal: Number(pl.kcal) || 0, prot_g: Number(pl.prot_g) || 0, fer_mg: Number(pl.fer_mg) || 0 },
+      stock: s, portions_par_unite: 1, unite_de_vente: 'portion', denombrable: true,
+    });
   }
-  return { state, foods, plats };
+
+  // Presets « repas extérieur » (resto léger/normal/copieux, valeurs sourcées).
+  const exterieurs = plats.filter((pl) => String(pl.type) === 'exterieur').map((pl) => ({
+    id: pl.id, nom: pl.nom,
+    macros: { kcal: Number(pl.kcal) || 0, prot_g: Number(pl.prot_g) || 0, fer_mg: Number(pl.fer_mg) || 0 },
+  }));
+
+  return { state, foods, exterieurs };
 }
 
 /* ------------------------------------------------------------------ */
@@ -317,7 +331,7 @@ async function renderBilanScreen() {
 /* ------------------------------------------------------------------ */
 const handlers = {
   onCommit: (changes) => commitChanges(changes),   // validation de l'inventaire
-  onLogPlat: (plat) => logPlatAction(plat),
+  onExterieur: (macros) => exterieurAction(macros),
 };
 
 /**
@@ -336,9 +350,12 @@ async function commitChanges(changes) {
   }
   paint();
 
+  // Baisse = consommé : un batch cuisiné se logge en `plat` (décrémente son
+  // propre stock), un aliment brut en `produit`. Hausse = correction de stock.
+  const isBatch = (c) => c.food && c.food.kind === 'plat';
   const ops = changes.map((c) => (c.delta > 0
-    ? logProduit(c.ref, c.delta)          // baisse = consommé
-    : adjustStock(c.ref, -c.delta)));     // hausse = -delta ajouté au stock
+    ? (isBatch(c) ? logPlat(c.ref, c.delta) : logProduit(c.ref, c.delta))
+    : adjustStock(c.ref, -c.delta)));
   const results = await Promise.allSettled(ops);
   const failed = results.filter((r) => r.status === 'rejected');
 
@@ -349,7 +366,7 @@ async function commitChanges(changes) {
     changes.forEach((c, i) => {
       if (results[i].status === 'rejected') {
         enqueue(c.delta > 0
-          ? { action: 'log', type: 'produit', ref: c.ref, quantite: c.delta }
+          ? { action: 'log', type: isBatch(c) ? 'plat' : 'produit', ref: c.ref, quantite: c.delta }
           : { action: 'log', type: 'ajustement', ref: c.ref, delta: -c.delta });
       }
     });
@@ -361,18 +378,19 @@ async function commitChanges(changes) {
   }
 }
 
-async function logPlatAction(plat) {
+/** Repas extérieur : macros libres → jauges du jour, sans toucher au stock. */
+async function exterieurAction(macros) {
   const snapshot = cloneModel(M);
-  applyMacros(M.state, plat.macros, 1, +1);
+  applyMacros(M.state, macros, 1, +1);
   paint();
   try {
-    await logPlat(plat.id);
-    toast(`${plat.nom} — loggé`, 'ok');
-    reconcile();
+    await logExterieur(macros);
+    toast('Repas extérieur ajouté', 'ok');
+    if (!IS_DEMO) reconcile();     // en démo la fixture est statique → garde le bump optimiste
   } catch (err) {
     if (isOffline(err)) {
-      enqueue({ action: 'log', type: 'plat', ref: plat.id });
-      toast('Hors-ligne — action mise en file', 'err');
+      enqueue({ action: 'log', type: 'exterieur', ...macros });
+      toast('Hors-ligne — repas mis en file', 'err');
     } else {
       M = snapshot; paint();
       toast(describeError(err), 'err');
@@ -455,7 +473,7 @@ function cloneModel(m) {
   return {
     state: JSON.parse(JSON.stringify(m.state)),
     foods: m.foods.map((f) => ({ ...f })),
-    plats: m.plats,
+    exterieurs: m.exterieurs,
   };
 }
 

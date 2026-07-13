@@ -5,6 +5,7 @@
 // Les curseurs modifiés sont surlignés jusqu'à validation.
 import { h, clear, num, macroChips } from './util.js';
 import { rank } from './engine.js';
+import { openExterieur } from './exterieur.js';
 
 const R = 42;
 const C = 2 * Math.PI * R;
@@ -180,47 +181,32 @@ function validateBar(onValider, onAnnuler) {
   };
 }
 
-/* ---------- Section plats (repliée) ---------- */
-function platsSection(plats, onLogPlat) {
-  if (!plats.length) return null;
-  const feasible = plats.filter((p) => p.faisable);
-  const rest = plats.filter((p) => !p.faisable);
-  const ordered = [...feasible, ...rest];
-
-  const section = h('section', { class: 'creneau' },
-    h('button', { class: 'creneau__head', type: 'button' },
-      h('span', { class: 'creneau__emoji' }, '🍲'),
-      'Plats & assemblages',
-      h('span', { class: 'creneau__count' }, `${plats.length}`),
-      h('span', { class: 'creneau__chevron' }, '›'),
-    ),
-    h('div', { class: 'creneau__body' },
-      h('div', { class: 'tiles' },
-        ...ordered.map((p) => h('button', {
-          class: `tile ${p.faisable ? 'tile--feasible' : 'tile--infeasible'}`, type: 'button',
-          onclick: () => onLogPlat(p),
-        },
-          p.type ? h('span', { class: 'tile__type' }, p.type) : null,
-          h('span', { class: 'tile__nom' }, p.nom),
-          h('span', { class: 'tile__macros' },
-            ...macroChips(p.macros).map(([k, v]) => h('span', {}, h('b', {}, v), ' ', k))),
-        )),
-      ),
-    ),
+/* ---------- Bloc « Repas extérieur » ---------- */
+/** Logger un repas mangé dehors (resto, invitation) : ouvre la feuille de saisie
+ *  (preset + curseurs kcal/prot). Compte dans les jauges, pas dans le stock. */
+function exterieurBlock(exterieurs, onExterieur) {
+  const btn = h('button', { class: 'ext-card', type: 'button' },
+    h('span', { class: 'ext-card__ico' }, '🍽️'),
+    h('span', { class: 'ext-card__txt' },
+      h('span', { class: 'ext-card__title' }, 'Repas extérieur'),
+      h('span', { class: 'ext-card__sub' }, 'Resto, invitation… — ajuste kcal et prot')),
+    h('span', { class: 'ext-card__go' }, '›'),
   );
-  section.querySelector('.creneau__head').addEventListener('click',
-    () => section.classList.toggle('is-open'));
-  return section;
+  btn.addEventListener('click', () => openExterieur(exterieurs, onExterieur));
+  return h('section', { style: 'margin-top:22px' },
+    h('div', { class: 'list-head' }, h('span', {}, 'Manger dehors')),
+    btn,
+  );
 }
 
 /**
  * @param root  conteneur
- * @param model { state, foods:[{id,nom,macros,stock,portions_par_unite,denombrable}], plats:[...] }
- * @param handlers { onCommit(changes), onLogPlat(plat) }
+ * @param model { state, foods:[{id,nom,kind,macros,stock,portions_par_unite,denombrable}], exterieurs:[...] }
+ * @param handlers { onCommit(changes), onExterieur(macros) }
  */
 export function renderToday(root, model, handlers) {
   clear(root);
-  const { state, foods, plats } = model;
+  const { state, foods, exterieurs } = model;
   const fab = document.getElementById('btn-quoi-manger');
 
   if (state.__offline) {
@@ -273,6 +259,5 @@ export function renderToday(root, model, handlers) {
     updateBar();
   }
 
-  const ps = platsSection(plats, handlers.onLogPlat);
-  if (ps) root.append(ps);
+  root.append(exterieurBlock(exterieurs || [], handlers.onExterieur));
 }

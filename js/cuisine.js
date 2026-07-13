@@ -56,25 +56,13 @@ function recipeCard(rec, handlers, { hero = false } = {}) {
     cta);
 }
 
-function statsRow(stats) {
-  const s = stats || {};
-  const cell = (value, label, cls) =>
-    h('div', { class: `cuisine-stat ${cls || ''}` }, h('b', {}, value), h('span', {}, label));
-  const calib = s.calibration_jours == null ? '—' : `${s.calibration_jours} j`;
-  return h('section', { class: 'cuisine-stats' },
-    cell(`${num(s.streak_prot || 0)} sem.`, 'streak protéines', 'is-streak'),
-    cell(num(s.recettes_essayees || 0), 'recettes essayées'),
-    cell(num(s.recettes_adoptees || 0), 'adoptées'),
-    cell(calib, 'depuis calibration'));
-}
-
 /**
  * @param root      conteneur
- * @param data      { recette_semaine, bibliotheque:[...], stats:{...} }
+ * @param data      { recette_semaine, bibliotheque:[...] }
  * @param handlers  { onCuisiner(recette) }
  */
 export function renderCuisine(root, data, handlers) {
-  const d = data || { recette_semaine: null, bibliotheque: [], stats: {} };
+  const d = data || { recette_semaine: null, bibliotheque: [] };
   clear(root);
 
   if (d.__offline) {
@@ -82,7 +70,6 @@ export function renderCuisine(root, data, handlers) {
   }
 
   root.append(h('p', { class: 'day-caption' }, 'Cuisine'));
-  root.append(statsRow(d.stats));
 
   const biblio = d.bibliotheque || [];
   const featuredId = d.recette_semaine && d.recette_semaine.recette_id;

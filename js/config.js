@@ -19,13 +19,3 @@ export const KEY = {
   last:    'enthalpie.courses.last',     // dernier lot validé (pour annuler)
   queue:   'enthalpie.queue',
 };
-
-// Créneaux dans l'ordre d'affichage (SPEC §3.2).
-export const CRENEAUX = [
-  { id: 'petit_dej', label: 'Petit déj', emoji: '🌅' },
-  { id: 'dejeuner',  label: 'Déjeuner',  emoji: '🍽️' },
-  { id: 'collation', label: 'Collation', emoji: '🍎' },
-  { id: 'diner',     label: 'Dîner',     emoji: '🌙' },
-];
-
-export const CRENEAU_LABEL = Object.fromEntries(CRENEAUX.map((c) => [c.id, c.label]));

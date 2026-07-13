@@ -635,22 +635,24 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .scan-flag { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--txt); }
 .scan-flag input { width: 20px; height: 20px; accent-color: var(--accent); }
 
-/* ---------- Écran Cuisine ---------- */
-.cuisine-stats {
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 4px 0;
-}
-.cuisine-stat {
+/* ---------- Bloc « Repas extérieur » (écran Aujourd'hui) ---------- */
+.ext-card {
+  width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
-  padding: 12px 14px; display: flex; flex-direction: column; gap: 2px;
+  padding: 14px 16px; min-height: var(--tap);
 }
-.cuisine-stat b { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.cuisine-stat span { font-size: 11.5px; color: var(--txt-dim); }
-.cuisine-stat.is-streak {
-  border-color: color-mix(in srgb, var(--prot) 40%, var(--line));
-  background: color-mix(in srgb, var(--prot) 8%, var(--surface));
-}
-.cuisine-stat.is-streak b { color: var(--prot); }
+.ext-card:active { background: var(--surface-2); }
+.ext-card__ico { font-size: 22px; flex-shrink: 0; }
+.ext-card__txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.ext-card__title { font-size: 15px; font-weight: 650; }
+.ext-card__sub { font-size: 12px; color: var(--txt-dim); }
+.ext-card__go { margin-left: auto; color: var(--txt-dim); font-size: 18px; }
 
+/* Feuille repas extérieur : curseurs kcal/prot (réutilise .qty__slider / .qty__preview) */
+.ext-slider { margin-bottom: 8px; }
+.ext-slider__lbl { display: block; font-size: 12.5px; color: var(--txt-muted); font-weight: 600; margin-bottom: 2px; }
+
+/* ---------- Écran Cuisine ---------- */
 .recipe-list { display: flex; flex-direction: column; gap: 10px; }
 .recipe-card {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);

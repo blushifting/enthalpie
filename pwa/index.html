@@ -19,7 +19,23 @@
   <!-- En-tête -->
   <header class="topbar">
     <div class="topbar__brand">
-      <span class="topbar__logo" aria-hidden="true">⟡</span>
+      <span class="topbar__logo" aria-hidden="true">
+        <svg viewBox="0 0 512 512" width="26" height="26" role="img" aria-label="Enthalpie">
+          <defs>
+            <linearGradient id="tb-g" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#7aa2f7"/>
+              <stop offset="1" stop-color="#59c896"/>
+            </linearGradient>
+          </defs>
+          <g transform="rotate(-90 256 256)">
+            <circle cx="256" cy="256" r="150" fill="none" stroke="#232833" stroke-width="34"/>
+            <circle cx="256" cy="256" r="150" fill="none" stroke="url(#tb-g)" stroke-width="34"
+                    stroke-linecap="round" stroke-dasharray="942.5" stroke-dashoffset="358"/>
+          </g>
+          <path d="M256 168 C214 214 196 244 196 280 a60 60 0 1 0 120 0 C316 244 298 214 256 168 Z"
+                fill="none" stroke="url(#tb-g)" stroke-width="16" stroke-linejoin="round"/>
+        </svg>
+      </span>
       <span class="topbar__title">Enthalpie</span>
     </div>
     <div class="topbar__actions">

@@ -165,17 +165,21 @@ const coursesHandlers = {
 
 async function renderCoursesScreen() {
   if (!IS_DEMO && !store.hasToken()) { openSettings({ force: true }); return; }
-  loadingMsg('Chargement des courses…');
+  // Affiche le dernier contenu connu immédiatement (pas de spinner), puis rafraîchit en fond.
+  const cached = store.getCachedCourses();
+  const hadCache = !!(cached && cached.courses);
+  if (hadCache) { CoursesData = cached.courses; renderCourses(appEl, cached.courses, coursesHandlers); }
+  else loadingMsg('Chargement des courses…');
   try {
     const courses = await getCourses();
-    CoursesData = courses;
     store.cacheCourses(courses);
-    renderCourses(appEl, courses, coursesHandlers);
+    const changed = !hadCache || !sameData(courses, cached.courses);
+    CoursesData = courses;
+    if (currentScreen === 'courses' && changed) renderCourses(appEl, courses, coursesHandlers);
   } catch (err) {
     const cc = store.getCachedCourses();
     if (cc && cc.courses) {
-      renderCourses(appEl, { ...cc.courses, __offline: true }, coursesHandlers);
-      toast('Hors-ligne — dernière liste connue', 'err');
+      if (currentScreen === 'courses') renderCourses(appEl, { ...cc.courses, __offline: true }, coursesHandlers);
     } else if (err instanceof ApiError && err.kind === 'noauth') {
       openSettings({ force: true });
     } else if (currentScreen === 'courses') {
@@ -246,18 +250,22 @@ const cuisineHandlers = { onCuisiner: (rec) => cuisinerBatch(rec) };
 
 async function renderCuisineScreen() {
   if (!IS_DEMO && !store.hasToken()) { openSettings({ force: true }); return; }
-  loadingMsg('Chargement de la cuisine…');
+  // Cache d'abord (affichage instantané), puis rafraîchissement en fond.
+  const cached = store.getCachedCuisine();
+  const hadCache = !!(cached && cached.cuisine);
+  if (hadCache) { CuisineData = cached.cuisine; renderCuisine(appEl, cached.cuisine, cuisineHandlers); }
+  else loadingMsg('Chargement de la cuisine…');
   try {
     const data = await getCuisine();
-    CuisineData = data;
     store.cacheCuisine(data);
-    renderCuisine(appEl, data, cuisineHandlers);
+    const changed = !hadCache || !sameData(data, cached.cuisine);
+    CuisineData = data;
+    if (currentScreen === 'cuisine' && changed) renderCuisine(appEl, data, cuisineHandlers);
   } catch (err) {
     const cc = store.getCachedCuisine();
     if (cc && cc.cuisine) {
       CuisineData = cc.cuisine;
-      renderCuisine(appEl, { ...cc.cuisine, __offline: true }, cuisineHandlers);
-      toast('Hors-ligne — dernière cuisine connue', 'err');
+      if (currentScreen === 'cuisine') renderCuisine(appEl, { ...cc.cuisine, __offline: true }, cuisineHandlers);
     } else if (err instanceof ApiError && err.kind === 'noauth') {
       openSettings({ force: true });
     } else if (currentScreen === 'cuisine') {
@@ -308,16 +316,20 @@ function bumpCuisineLocal(rec, portions) {
 /* ------------------------------------------------------------------ */
 async function renderBilanScreen() {
   if (!IS_DEMO && !store.hasToken()) { openSettings({ force: true }); return; }
-  loadingMsg('Chargement du bilan…');
+  // Cache d'abord (affichage instantané), puis rafraîchissement en fond.
+  const cached = store.getCachedBilan();
+  const hadCache = !!(cached && cached.bilan);
+  if (hadCache) renderBilan(appEl, cached.bilan);
+  else loadingMsg('Chargement du bilan…');
   try {
     const data = await getBilan();
     store.cacheBilan(data);
-    renderBilan(appEl, data);
+    const changed = !hadCache || !sameData(data, cached.bilan);
+    if (currentScreen === 'bilan' && changed) renderBilan(appEl, data);
   } catch (err) {
     const cb = store.getCachedBilan();
     if (cb && cb.bilan) {
-      renderBilan(appEl, { ...cb.bilan, __offline: true });
-      toast('Hors-ligne — dernier bilan connu', 'err');
+      if (currentScreen === 'bilan') renderBilan(appEl, { ...cb.bilan, __offline: true });
     } else if (err instanceof ApiError && err.kind === 'noauth') {
       openSettings({ force: true });
     } else if (currentScreen === 'bilan') {
@@ -400,6 +412,11 @@ async function exterieurAction(macros) {
 
 function isOffline(err) {
   return err instanceof ApiError && (err.kind === 'network' || err.kind === 'http');
+}
+
+/** Deux payloads identiques ? (évite un re-render inutile après rafraîchissement en fond) */
+function sameData(a, b) {
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
 }
 
 /* ------------------------------------------------------------------ */

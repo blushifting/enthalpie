@@ -68,7 +68,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   border-bottom: 1px solid var(--line);
 }
 .topbar__brand { display: flex; align-items: center; gap: 9px; }
-.topbar__logo { color: var(--accent); font-size: 20px; }
+.topbar__logo { display: inline-flex; align-items: center; }
+.topbar__logo svg { display: block; width: 26px; height: 26px; }
 .topbar__title { font-weight: 650; letter-spacing: .3px; font-size: 17px; }
 .topbar__actions { display: flex; gap: 8px; }
 

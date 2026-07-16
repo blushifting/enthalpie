@@ -740,6 +740,43 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 .bilan-foot { margin-top: 22px; font-size: 11.5px; color: var(--txt-dim); text-align: center; line-height: 1.5; }
 
+/* ---------- Popin « mise à jour disponible » ---------- */
+/* Juste au-dessus de la tabbar (56px + marge). Le FAB remonte via body.has-update. */
+.update-popin {
+  position: fixed; left: var(--pad); right: var(--pad);
+  bottom: calc(var(--safe-bot) + 74px); z-index: 40;
+  margin: 0 auto; max-width: 520px;
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 28px rgba(0,0,0,.5);
+  animation: update-in .22s ease-out both;
+}
+.update-popin__ico   { font-size: 17px; line-height: 1; }
+.update-popin__txt   { flex: 1; min-width: 0; }
+.update-popin__title { font-size: 14px; font-weight: 650; }
+.update-popin__sub   { font-size: 12px; color: var(--txt-muted); margin-top: 1px; }
+.update-popin__btn {
+  flex: none; min-height: 38px; padding: 0 14px;
+  border: 0; border-radius: 10px;
+  background: var(--accent); color: #0b1020;
+  font-size: 13.5px; font-weight: 700;
+}
+.update-popin__btn:active { filter: brightness(.95); }
+.update-popin__btn[disabled] { opacity: .6; }
+.update-popin__close {
+  flex: none; width: 30px; height: 30px;
+  border: 0; border-radius: 8px;
+  background: transparent; color: var(--txt-dim); font-size: 14px;
+}
+@keyframes update-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* Le FAB s'efface tant que le popin est affiché : sa hauteur varie selon le
+   retour à la ligne, un décalage en pixels serait fragile. Il revient à la fermeture. */
+body.has-update .fab { display: none; }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }

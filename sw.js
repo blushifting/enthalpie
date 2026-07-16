@@ -3,7 +3,7 @@
 // instantané + mise à jour en arrière-plan) ; réseau direct pour l'API Apps Script
 // et OpenFoodFacts (jamais cachées — la couche localStorage gère déjà le cache métier).
 // Bump CACHE à chaque release pour purger l'ancien app-shell.
-const CACHE = 'enthalpie-shell-v6';
+const CACHE = 'enthalpie-shell-v7';
 
 const SHELL = [
   './',
@@ -27,12 +27,17 @@ const SHELL = [
   './icons/icon.svg',
 ];
 
+// Pas de skipWaiting() ici : la nouvelle version reste en attente et la page
+// propose un popin « Mise à jour disponible » (cf. message SKIP_WAITING).
+// À la toute première installation il n'y a pas d'ancien SW → activation directe.
 self.addEventListener('install', (e) => {
-  e.waitUntil(
-    caches.open(CACHE)
-      .then((c) => c.addAll(SHELL))
-      .then(() => self.skipWaiting())
-  );
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+});
+
+// La page demande la bascule (tap sur « Recharger ») → on prend la main, ce qui
+// déclenche `controllerchange` côté page, qui recharge.
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (e) => {

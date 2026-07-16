@@ -84,13 +84,52 @@ export async function flushQueue({ silent = false } = {}) {
 /* ------------------------------------------------------------------ */
 // Enregistré uniquement hors développement local : sur localhost le SWR
 // servirait des fichiers en cache et masquerait les modifications en cours.
-export function registerServiceWorker() {
+// `onUpdateReady(reg)` est appelé quand une nouvelle version est installée et
+// attend de prendre la main → la page affiche le popin « Mise à jour disponible ».
+export function registerServiceWorker(onUpdateReady) {
   if (!('serviceWorker' in navigator)) return;
   const host = location.hostname;
   const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.local');
   if (isLocal) { console.info('[sw] dev local — service worker non enregistré'); return; }
+
+  // Recharge uniquement après une bascule demandée par l'utilisateur : évite le
+  // rechargement parasite du `clients.claim()` de la toute première installation.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!updateRequested || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then((reg) => {
+        const notify = () => { if (typeof onUpdateReady === 'function') onUpdateReady(reg); };
+        // Version déjà en attente au chargement (installée lors d'une session précédente).
+        if (reg.waiting && navigator.serviceWorker.controller) notify();
+        // Version qui s'installe pendant la session.
+        reg.addEventListener('updatefound', () => {
+          const nouveau = reg.installing;
+          if (!nouveau) return;
+          nouveau.addEventListener('statechange', () => {
+            // `controller` présent ⇒ c'est bien une mise à jour, pas la 1re installation.
+            if (nouveau.state === 'installed' && navigator.serviceWorker.controller) notify();
+          });
+        });
+        // Cherche une nouvelle version à chaque retour sur l'app (PWA rarement fermée).
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+      })
       .catch((e) => console.warn('[sw] enregistrement échoué', e));
   });
+}
+
+let updateRequested = false;
+let reloading = false;
+
+/** Tap sur « Recharger » : le SW en attente prend la main → controllerchange → reload. */
+export function applyUpdate(reg) {
+  if (!reg || !reg.waiting) return;
+  updateRequested = true;
+  reg.waiting.postMessage({ type: 'SKIP_WAITING' });
 }

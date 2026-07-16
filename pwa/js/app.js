@@ -8,7 +8,7 @@ import { renderCuisine } from './cuisine.js';
 import { renderBilan } from './bilan.js';
 import { openQuoiManger } from './quoimanger.js';
 import { openScan } from './scan.js';
-import { flushQueue, updateQueueBadge, registerServiceWorker } from './sync.js';
+import { flushQueue, updateQueueBadge, registerServiceWorker, applyUpdate } from './sync.js';
 import { DEFAULT_API_BASE } from './config.js';
 
 const appEl = $('#app');
@@ -558,6 +558,34 @@ function openSettings({ force = false } = {}) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Popin « mise à jour disponible »                                    */
+/* ------------------------------------------------------------------ */
+/** Affiché quand une nouvelle version du SW attend de prendre la main. */
+function showUpdatePopin(reg) {
+  if (document.querySelector('.update-popin')) return;      // déjà proposé
+  const btn = h('button', { class: 'update-popin__btn', type: 'button' }, 'Recharger');
+  btn.onclick = () => {
+    btn.disabled = true;
+    btn.textContent = '…';
+    applyUpdate(reg);                                        // → bascule → rechargement auto
+  };
+  const plusTard = h('button', {
+    class: 'update-popin__close', type: 'button', 'aria-label': 'Plus tard',
+    onclick: () => { el.remove(); document.body.classList.remove('has-update'); },
+  }, '✕');
+
+  const el = h('div', { class: 'update-popin', role: 'status' },
+    h('span', { class: 'update-popin__ico', 'aria-hidden': 'true' }, '✨'),
+    h('div', { class: 'update-popin__txt' },
+      h('div', { class: 'update-popin__title' }, 'Mise à jour disponible'),
+      h('div', { class: 'update-popin__sub' }, 'Une nouvelle version est prête.')),
+    btn, plusTard);
+
+  document.body.append(el);
+  document.body.classList.add('has-update');                 // fait remonter le FAB
+}
+
+/* ------------------------------------------------------------------ */
 /* Câblage + boot                                                      */
 /* ------------------------------------------------------------------ */
 document.querySelectorAll('.tab').forEach((t) =>
@@ -599,6 +627,6 @@ window.addEventListener('offline', () => updateQueueBadge());
 
 // Boot : badge, service worker (hors localhost), puis rejeu silencieux de la file.
 updateQueueBadge();
-registerServiceWorker();
+registerServiceWorker(showUpdatePopin);
 setScreen('today');
 syncQueue({ silent: true });

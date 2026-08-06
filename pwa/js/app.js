@@ -424,6 +424,7 @@ function sameData(a, b) {
 /* ------------------------------------------------------------------ */
 const scanContext = {
   findByEan: (ean) => foodByEan(ean),
+  onRestock: (food, unites) => restockAction(food, unites),
   onPotFini: (food) => potFiniAction(food),
   onAddProduit: (fiche) => addProduitAction(fiche),
 };
@@ -446,7 +447,34 @@ function foodByEan(ean) {
     id: pr.id, nom: pr.nom, ean: code,
     macros: { kcal: Number(pr.kcal) || 0, prot_g: Number(pr.prot_g) || 0, fer_mg: Number(pr.fer_mg) || 0 },
     stock: Number(st[pr.id]) || 0,
+    // Nécessaires à la feuille de scan pour convertir « unités » → portions.
+    unite_de_vente: pr.unite_de_vente || '',
+    portions_par_unite: Number(pr.portions_par_unite) || 1,
   };
+}
+
+/**
+ * Réappro depuis le scan : « j'en ai N unités » → +N × portions_par_unite au
+ * stock. Réutilise l'endpoint « courses » (même sémantique côté Sheet).
+ */
+async function restockAction(food, unites) {
+  const ppu = Math.max(1, Number(food.portions_par_unite) || 1);
+  const portions = Math.max(1, Number(unites) || 1) * ppu;
+  const f = M && M.foods && M.foods.find((x) => x.id === food.id);
+  if (f) { f.stock = (Number(f.stock) || 0) + portions; if (currentScreen === 'today') paint(); }
+  try {
+    await logCourses([{ produit_id: food.id, unites: Math.max(1, Number(unites) || 1) }]);
+    toast(`${food.nom} — +${num(portions)} portions`, 'ok');
+    M = null; CoursesData = null; refreshCurrent();
+  } catch (err) {
+    if (isOffline(err)) {
+      enqueue({ action: 'log', type: 'courses', items: [{ produit_id: food.id, unites: Math.max(1, Number(unites) || 1) }], source: 'scan' });
+      toast('Hors-ligne — ajout mis en file', 'err');
+    } else {
+      toast(describeError(err), 'err');
+      throw err;                 // la feuille de scan réactive son bouton
+    }
+  }
 }
 
 /** « Pot fini » depuis le scan : force le stock à 0 + recalibration backend. */

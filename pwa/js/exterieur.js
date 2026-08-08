@@ -1,17 +1,17 @@
 // Feuille « Repas extérieur » : logger un repas mangé dehors (resto, invitation).
 // On part d'un preset resto (léger / normal / copieux — valeurs sourcées du
-// catalogue) puis on ajuste kcal et protéines au curseur. Le fer suit le preset.
-// Confirmation → onLog({kcal, prot_g, fer_mg, ref}) : compté dans les jauges du
+// catalogue) puis on ajuste kcal et protéines au curseur.
+// Confirmation → onLog({kcal, prot_g, ref}) : compté dans les jauges du
 // jour, sans toucher au stock (aucun ingrédient consommé).
 import { h, clear, num } from './util.js';
 
 const KCAL_MAX = 2000;
 const PROT_MAX = 80;
 
-/** openExterieur(presets, onLog) — presets:[{id,nom,macros:{kcal,prot_g,fer_mg}}]. */
+/** openExterieur(presets, onLog) — presets:[{id,nom,macros:{kcal,prot_g}}]. */
 export function openExterieur(presets, onLog) {
   const list = (presets && presets.length) ? presets : [{
-    id: '', nom: 'Repas extérieur', macros: { kcal: 800, prot_g: 25, fer_mg: 3 },
+    id: '', nom: 'Repas extérieur', macros: { kcal: 800, prot_g: 25 },
   }];
 
   const root = document.getElementById('sheet-root');
@@ -24,14 +24,12 @@ export function openExterieur(presets, onLog) {
   let current = list[Math.min(1, list.length - 1)];   // « normal » par défaut si dispo
   let kcal = current.macros.kcal;
   let prot = current.macros.prot_g;
-  let fer = current.macros.fer_mg;
 
   const kcalSlider = h('input', { type: 'range', class: 'qty__slider', min: '0', max: String(KCAL_MAX), step: '25', value: String(kcal), 'aria-label': 'Calories du repas' });
   const protSlider = h('input', { type: 'range', class: 'qty__slider', min: '0', max: String(PROT_MAX), step: '1', value: String(prot), 'aria-label': 'Protéines du repas' });
 
   const kcalStat = h('b', {}, num(kcal));
   const protStat = h('b', {}, num(prot));
-  const ferStat = h('b', {}, num(fer));
 
   const chips = list.map((p) => {
     const chip = h('button', { class: 'qty__chip', type: 'button' }, p.nom);
@@ -45,11 +43,10 @@ export function openExterieur(presets, onLog) {
   function renderStats() {
     kcalStat.textContent = num(kcal);
     protStat.textContent = num(prot);
-    ferStat.textContent = num(fer);
   }
   function selectPreset(p, chip) {
     current = p;
-    kcal = p.macros.kcal; prot = p.macros.prot_g; fer = p.macros.fer_mg;
+    kcal = p.macros.kcal; prot = p.macros.prot_g;
     kcalSlider.value = String(Math.min(KCAL_MAX, kcal));
     protSlider.value = String(Math.min(PROT_MAX, prot));
     renderStats();
@@ -63,7 +60,7 @@ export function openExterieur(presets, onLog) {
   confirm.addEventListener('click', () => {
     confirm.disabled = true;
     close();
-    onLog({ kcal, prot_g: prot, fer_mg: fer, ref: current.id || '' });
+    onLog({ kcal, prot_g: prot, ref: current.id || '' });
   });
 
   const sheet = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true' },
@@ -79,8 +76,7 @@ export function openExterieur(presets, onLog) {
       protSlider),
     h('div', { class: 'qty__preview' },
       h('div', { class: 'qty__stat qty__stat--prot' }, protStat, h('span', {}, 'g prot')),
-      h('div', { class: 'qty__stat qty__stat--kcal' }, kcalStat, h('span', {}, 'kcal')),
-      h('div', { class: 'qty__stat qty__stat--fer' }, ferStat, h('span', {}, 'mg fer'))),
+      h('div', { class: 'qty__stat qty__stat--kcal' }, kcalStat, h('span', {}, 'kcal'))),
     confirm,
   );
 

@@ -11,7 +11,7 @@
  *   GET  ?token=…&action=catalog        → produits + plats actifs
  *   GET  ?token=…&action=courses        → liste de courses (par magasin/rayon)
  *   GET  ?token=…&action=cuisine        → recette de la semaine + biblio batch + compteurs
- *   GET  ?token=…&action=bilan          → moyennes hebdo prot/fer/kcal vs cibles (4 sem.)
+ *   GET  ?token=…&action=bilan          → moyennes hebdo prot/kcal vs cibles (4 sem.)
  *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement | exterieur
  *   POST {token, action:'cloture'}      → clôture médiane du jour (aussi appelable par trigger)
  *
@@ -32,10 +32,10 @@
 var SCHEMA = {
   produits: [
     'id', 'nom', 'marque_magasin', 'ean', 'poids_paquet_g',
-    'kcal_100g', 'prot_100g', 'fer_100g_mg', 'flag_gluten', 'flag_lactose', 'perissable_jours', 'actif'
+    'kcal_100g', 'prot_100g', 'fibres_100g', 'flag_gluten', 'flag_lactose', 'perissable_jours', 'actif'
   ],
   plats: [
-    'id', 'nom', 'creneau', 'composition', 'kcal_100g', 'prot_100g', 'fer_100g_mg',
+    'id', 'nom', 'creneau', 'composition', 'kcal_100g', 'prot_100g', 'fibres_100g',
     'type', 'gabarit', 'actif'
   ],
   recettes: [
@@ -48,7 +48,7 @@ var SCHEMA = {
     'ref', 'grammes'
   ],
   objectifs: [
-    'kcal_jour', 'prot_g_jour', 'fer_mg_jour', 'tol_kcal', 'tol_prot',
+    'kcal_jour', 'prot_g_jour', 'tol_kcal', 'tol_prot',
     'mode_strict_gluten', 'mode_strict_lactose'
   ],
   parametres: [
@@ -97,9 +97,8 @@ function seedDefaults_() {
   if (obj.length === 0) {
     // Cibles issues de skill-nutrition/SKILL.md :
     //  - protéines 110 g/j (1,7 g/kg)  - calories 2850 kcal/j (point de départ, à calibrer)
-    //  - fer : PAS de cible dure → suivi informatif, cible = 0
     appendRow_('objectifs', {
-      kcal_jour: 2850, prot_g_jour: 110, fer_mg_jour: 0,
+      kcal_jour: 2850, prot_g_jour: 110,
       tol_kcal: 200, tol_prot: 10,
       mode_strict_gluten: 'off', mode_strict_lactose: 'off'
     });
@@ -227,7 +226,7 @@ function json_(obj) {
 /* 5. LECTURES (GET)                                                      */
 /* ===================================================================== */
 
-/** État du jour : jauges (prot/fer/kcal consommés vs cibles), pools par créneau, stock. */
+/** État du jour : jauges (prot/kcal consommés vs cibles), pools par créneau, stock. */
 function getState_() {
   var tz = params_().tz || 'Europe/Paris';
   var today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
@@ -237,7 +236,7 @@ function getState_() {
   var stock = stockMap_();
 
   // Consommation du jour à partir du log (plats ET produits bruts loggués au curseur)
-  var conso = { kcal: 0, prot_g: 0, fer_mg: 0 };
+  var conso = { kcal: 0, prot_g: 0 };
   readTable_('log').forEach(function (l) {
     if (formatTs_(l.timestamp, tz) !== today) return;
     // Les macros de plats/produits sont POUR 100 g et la quantité loguée est en
@@ -248,13 +247,12 @@ function getState_() {
     else if (l.type === 'produit') { m = macrosProduit_(l.ref, produitsById); f = (Number(l.quantite) || 0) / 100; }
     else if (l.type === 'exterieur') { m = parseExtra_(l.extra); f = 1; }
     else return;
-    conso.kcal += m.kcal * f; conso.prot_g += m.prot_g * f; conso.fer_mg += m.fer_mg * f;
+    conso.kcal += m.kcal * f; conso.prot_g += m.prot_g * f;
   });
 
   var obj = objectifs_();
   var jauges = {
     prot_g: gauge_(conso.prot_g, obj.prot_g_jour),
-    fer_mg: gauge_(conso.fer_mg, obj.fer_mg_jour),
     kcal:   gauge_(conso.kcal, obj.kcal_jour)
   };
 
@@ -415,7 +413,7 @@ function getCuisine_() {
   };
 }
 
-/** Bilan 4 semaines glissantes : moyennes journalières prot/fer/kcal vs cibles (SPEC §4.4). */
+/** Bilan 4 semaines glissantes : moyennes journalières prot/kcal vs cibles (SPEC §4.4). */
 function getBilan_() {
   return moyennesHebdo_(params_().tz || 'Europe/Paris', 4);
 }
@@ -434,8 +432,8 @@ function intakeParJour_(tz) {
     else if (l.type === 'exterieur') { m = parseExtra_(l.extra); f = 1; }
     else return;
     var day = formatTs_(l.timestamp, tz);
-    var b = parJour[day] || (parJour[day] = { kcal: 0, prot_g: 0, fer_mg: 0 });
-    b.kcal += m.kcal * f; b.prot_g += m.prot_g * f; b.fer_mg += m.fer_mg * f;
+    var b = parJour[day] || (parJour[day] = { kcal: 0, prot_g: 0 });
+    b.kcal += m.kcal * f; b.prot_g += m.prot_g * f;
   });
   return parJour;
 }
@@ -455,14 +453,14 @@ function moyennesHebdo_(tz, nb) {
   for (var w = nb - 1; w >= 0; w--) {
     var fin = new Date(today.getTime() - w * JOURS * 86400000);
     var debut = new Date(fin.getTime() - (JOURS - 1) * 86400000);
-    var somme = { kcal: 0, prot_g: 0, fer_mg: 0 };
+    var somme = { kcal: 0, prot_g: 0 };
     var joursEcoules = 0, joursAvecDonnees = 0;
     for (var d = 0; d < JOURS; d++) {
       var jour = new Date(debut.getTime() + d * 86400000);
       if (jour.getTime() > today.getTime()) break;   // futur (semaine courante partielle)
       joursEcoules++;
       var b = parJour[Utilities.formatDate(jour, tz, 'yyyy-MM-dd')];
-      if (b) { somme.kcal += b.kcal; somme.prot_g += b.prot_g; somme.fer_mg += b.fer_mg; joursAvecDonnees++; }
+      if (b) { somme.kcal += b.kcal; somme.prot_g += b.prot_g; joursAvecDonnees++; }
     }
     var denom = joursEcoules || 1;
     semaines.push({
@@ -473,8 +471,7 @@ function moyennesHebdo_(tz, nb) {
       jours_avec_donnees: joursAvecDonnees,
       moyennes: {
         kcal: round1_(somme.kcal / denom),
-        prot_g: round1_(somme.prot_g / denom),
-        fer_mg: round1_(somme.fer_mg / denom)
+        prot_g: round1_(somme.prot_g / denom)
       }
     });
   }
@@ -490,7 +487,7 @@ function moyennesHebdo_(tz, nb) {
   }
 
   return {
-    cibles: { kcal: Number(obj.kcal_jour) || 0, prot_g: cibleProt, fer_mg: Number(obj.fer_mg_jour) || 0 },
+    cibles: { kcal: Number(obj.kcal_jour) || 0, prot_g: cibleProt },
     tolerances: { kcal: Number(obj.tol_kcal) || 0, prot_g: tolProt },
     semaines: semaines,
     streak_prot: streak
@@ -639,7 +636,7 @@ function coursesValidees_(p, now) {
  * dans la PWA). Idempotent sur l'EAN : rescanner un EAN déjà connu renvoie le
  * produit existant sans créer de doublon. Génère l'id (P + n° suivant).
  * Corps attendu : { action:'add_produit', produit:{ nom, ean, kcal, prot_g,
- *   fer_100g_mg, poids_paquet_g, flag_gluten, flag_lactose,
+ *   poids_paquet_g, flag_gluten, flag_lactose,
  *   marque_magasin?, perissable_jours?, stock_initial? } }
  * Valeurs nutritionnelles POUR 100 g ; stock_initial et poids_paquet_g en grammes.
  */
@@ -666,8 +663,10 @@ function addProduit_(p) {
     ean: ean,
     poids_paquet_g: Number(f.poids_paquet_g) || 0,
     kcal_100g: Number(f.kcal_100g) || 0,
+    // Vide si non renseigné : distinguer « sans fibres » de « on ne sait pas »
+    // sera impossible plus tard, et la jauge fibres viendra peut-être un jour.
+    fibres_100g: (f.fibres_100g === '' || f.fibres_100g == null) ? '' : Number(f.fibres_100g),
     prot_100g: Number(f.prot_100g) || 0,
-    fer_100g_mg: Number(f.fer_100g_mg) || 0,
     flag_gluten: normFlag_(f.flag_gluten),
     flag_lactose: normFlag_(f.flag_lactose),
     perissable_jours: (f.perissable_jours === '' || f.perissable_jours == null) ? '' : Number(f.perissable_jours),
@@ -708,7 +707,6 @@ function publicProduit_(pr) {
     id: pr.id, nom: pr.nom,
     kcal_100g: Number(pr.kcal_100g) || 0,
     prot_100g: Number(pr.prot_100g) || 0,
-    fer_100g_mg: Number(pr.fer_100g_mg) || 0,
     poids_paquet_g: Number(pr.poids_paquet_g) || 0,
     ean: String(pr.ean || ''), actif: pr.actif
   };
@@ -731,7 +729,7 @@ function ajustement_(p, now) {
  * sont stockées dans la colonne `extra` du log pour être relues par state/bilan.
  */
 function exterieur_(p, now) {
-  var macros = { kcal: Number(p.kcal) || 0, prot_g: Number(p.prot_g) || 0, fer_mg: Number(p.fer_mg) || 0 };
+  var macros = { kcal: Number(p.kcal) || 0, prot_g: Number(p.prot_g) || 0 };
   appendRow_('log', {
     timestamp: now, type: 'exterieur', ref: p.ref || '', quantite: 1,
     source: p.source || 'tap', extra: JSON.stringify(macros)
@@ -739,13 +737,13 @@ function exterieur_(p, now) {
   return { exterieur: macros, ref: p.ref || '' };
 }
 
-/** Parse la colonne `extra` d'un log (JSON de macros) → {kcal,prot_g,fer_mg}. */
+/** Parse la colonne `extra` d'un log (JSON de macros) → {kcal,prot_g}. */
 function parseExtra_(extra) {
-  if (!extra) return { kcal: 0, prot_g: 0, fer_mg: 0 };
+  if (!extra) return { kcal: 0, prot_g: 0 };
   try {
     var o = typeof extra === 'string' ? JSON.parse(extra) : extra;
-    return { kcal: Number(o.kcal) || 0, prot_g: Number(o.prot_g) || 0, fer_mg: Number(o.fer_mg) || 0 };
-  } catch (e) { return { kcal: 0, prot_g: 0, fer_mg: 0 }; }
+    return { kcal: Number(o.kcal) || 0, prot_g: Number(o.prot_g) || 0 };
+  } catch (e) { return { kcal: 0, prot_g: 0 }; }
 }
 
 /* ===================================================================== */
@@ -934,16 +932,15 @@ function composition_(pl) {
  */
 function macrosOf_(platId, platsById) {
   var pl = platsById[platId];
-  if (!pl) return { kcal: 0, prot_g: 0, fer_mg: 0 };
+  if (!pl) return { kcal: 0, prot_g: 0 };
   if (pl.kcal_100g !== '' && pl.kcal_100g != null) {
     return {
       kcal: Number(pl.kcal_100g) || 0,
-      prot_g: Number(pl.prot_100g) || 0,
-      fer_mg: Number(pl.fer_100g_mg) || 0
+      prot_g: Number(pl.prot_100g) || 0
     };
   }
   var produitsById = indexBy_(readTable_('produits'), 'id');
-  var tot = { kcal: 0, prot_g: 0, fer_mg: 0 };
+  var tot = { kcal: 0, prot_g: 0 };
   var poids = 0;
   composition_(pl).forEach(function (c) {
     var pr = produitsById[c.produit_id];
@@ -951,12 +948,11 @@ function macrosOf_(platId, platsById) {
     var r = c.grammes / 100;
     tot.kcal += (Number(pr.kcal_100g) || 0) * r;
     tot.prot_g += (Number(pr.prot_100g) || 0) * r;
-    tot.fer_mg += (Number(pr.fer_100g_mg) || 0) * r;
     poids += c.grammes;
   });
-  if (!(poids > 0)) return { kcal: 0, prot_g: 0, fer_mg: 0 };
+  if (!(poids > 0)) return { kcal: 0, prot_g: 0 };
   var k = 100 / poids;
-  return { kcal: tot.kcal * k, prot_g: tot.prot_g * k, fer_mg: tot.fer_mg * k };
+  return { kcal: tot.kcal * k, prot_g: tot.prot_g * k };
 }
 
 /** Poids total d'une fournée = somme des ingrédients de la composition (g). */
@@ -969,11 +965,10 @@ function poidsFournee_(pl) {
 /** Macros POUR 100 g d'un produit brut. Multiplier par grammes/100 pour l'apport. */
 function macrosProduit_(produitId, produitsById) {
   var pr = produitsById[produitId];
-  if (!pr) return { kcal: 0, prot_g: 0, fer_mg: 0 };
+  if (!pr) return { kcal: 0, prot_g: 0 };
   return {
     kcal: Number(pr.kcal_100g) || 0,
-    prot_g: Number(pr.prot_100g) || 0,
-    fer_mg: Number(pr.fer_100g_mg) || 0
+    prot_g: Number(pr.prot_100g) || 0
   };
 }
 
@@ -1186,8 +1181,8 @@ function migrerEnGrammes() {
   }
 
   // 6. Valeurs nutritionnelles : par portion → pour 100 g, et en-têtes.
-  convertirNutriments_('produits', portionG, ['kcal', 'prot_g', 'fer_mg'],
-    ['kcal_100g', 'prot_100g', 'fer_100g_mg']);
+  convertirNutriments_('produits', portionG, ['kcal', 'prot_g'],
+    ['kcal_100g', 'prot_100g']);
   renommerColonne_('produits', 'portions_par_unite', 'poids_paquet_g', function (val, row) {
     return round2_(contenanceEnGrammes_(row.unite_de_vente));
   });
@@ -1271,8 +1266,8 @@ function convertirNutriments_(onglet, portionG, avant, apres) {
 function convertirNutrimentsPlats_(portionG, platsById) {
   var sh = sheet_('plats');
   var v = sh.getDataRange().getValues();
-  var cols = ['kcal', 'prot_g', 'fer_mg'];
-  var noms = ['kcal_100g', 'prot_100g', 'fer_100g_mg'];
+  var cols = ['kcal', 'prot_g'];
+  var noms = ['kcal_100g', 'prot_100g'];
   var idx = cols.map(function (h) { return v[0].indexOf(h); });
   for (var r = 1; r < v.length; r++) {
     var pl = platsById[String(v[r][0])];

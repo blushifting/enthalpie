@@ -156,7 +156,9 @@ function normalizeOFF(ean, p) {
     poids_net_g: Number(p.product_quantity) > 0 ? Math.round(Number(p.product_quantity)) : 0,
     kcal_100g: Math.round(offNum(n, ['energy-kcal_100g', 'energy-kcal_serving'])),
     prot_100g: Math.round(offNum(n, ['proteins_100g', 'proteins_serving']) * 10) / 10,
-    fer_100g_mg: Math.round(offNum(n, ['iron_100g']) * 1000 * 100) / 100, // OFF : fer en g/100 g
+    // Fibres : facultatives sur l'étiquette, donc absentes d'environ un tiers des
+    // fiches. null (et non 0) pour ne pas confondre « sans fibres » et « inconnu ».
+    fibres_100g: n['fiber_100g'] != null ? Math.round(Number(n['fiber_100g']) * 10) / 10 : null,
     flag_gluten: has('gluten') ? 'oui' : 'non',
     flag_lactose: (has('milk') || has('lactose')) ? 'oui' : 'non',
   };

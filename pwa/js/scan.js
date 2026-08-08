@@ -193,47 +193,66 @@ export function openScan(ctx) {
 
     const nomIn = field_('Nom du produit', fiche && fiche.nom, 'text',
       fiche && fiche.marque ? `Marque : ${fiche.marque}` : 'Tel qu\'il apparaîtra dans l\'app.');
-    const uniteIn = field_('Unité de vente', fiche && fiche.quantite, 'text',
-      'ex. « pot 500 g », « boîte de 6 ». La contenance en g/ml sert à calculer la portion.');
-    const ppuIn = field_('Portions par unité', 1, 'number',
-      'Combien de fois tu manges dans un contenant.');
-    const portionIn = field_('Taille d\'une portion (g)', '', 'number', null);
+    // Le lot est parfois écrit en toutes lettres — « 360 g (6 x 60 g) ». Quand
+    // c'est le cas, il donne d'un coup le nombre de portions ET leur poids.
+    const lot = parseLotG_(fiche && fiche.quantite);
+    const poidsInit = (fiche && fiche.poids_net_g)
+      || (lot ? lot.n * lot.g : 0)
+      || parseContenanceG_(fiche && fiche.quantite)
+      || '';
+    // Étiquette affichée dans Courses et dans « j'en ai N boîtes ». Reprise telle
+    // quelle d'OpenFoodFacts : elle ne sert plus à aucun calcul, donc pas de champ.
+    const uniteAuto = (fiche && fiche.quantite) || '';
+
+    const ppuIn = field_('Portions par unité', lot ? lot.n : 1, 'number',
+      'Ce que tu comptes comme une portion : 6 pour une boîte de 6 œufs, 10 pour 10 tranches.');
+    const poidsIn = field_('Poids net du paquet (g)', poidsInit, 'number',
+      'Ce qui est marqué sur l\'emballage. Laisse vide si tu ne l\'as pas.');
+    const portionIn = field_('Taille d\'une portion (g)', lot ? lot.g : '', 'number',
+      'Le poids d\'un œuf, d\'une tranche… Se déduit du paquet, mais tu peux l\'écrire directement.');
     const kcalIn = field_('kcal pour 100 g', fiche ? fiche.kcal_100g : '', 'number', null);
     const protIn = field_('Protéines pour 100 g (g)', fiche ? fiche.prot_100g : '', 'number', null);
     const stockIn = field_('Tu en as combien ? (unités)', 1, 'number',
       'Ce que tu as sous la main maintenant. À 0, le produit n\'apparaîtra pas dans « Mon stock ».');
 
-    // La portion se déduit de la contenance ÷ portions par unité, tant qu'Azur
-    // ne l'a pas saisie à la main (auquel cas sa valeur prime).
+    // Poids du paquet et taille de portion se déduisent l'un de l'autre via le
+    // nombre de portions : le dernier des deux saisi à la main fait foi. Aucune
+    // valeur par défaut n'est inventée — sans l'un des deux, on le dit et on bloque.
     let portionTouched = false;
     portionIn.input.addEventListener('input', () => { portionTouched = true; syncPortion(); });
+    poidsIn.input.addEventListener('input', () => { portionTouched = false; syncPortion(); });
 
-    const autoPortion = () => {
-      const cont = parseContenanceG_(uniteIn.input.value);
-      const ppu = Math.max(1, Number(ppuIn.input.value) || 1);
-      return cont ? Math.round(cont / ppu) : null;
-    };
-    const currentPortion = () => Number(portionIn.input.value) || autoPortion() || 100;
+    const ppuVal = () => Math.max(1, Number(ppuIn.input.value) || 1);
+    const currentPortion = () => Number(portionIn.input.value) || 0;
 
     const preview = h('div', { class: 'scan-preview' });
     function syncPortion() {
-      if (!portionTouched) {
-        const auto = autoPortion();
-        portionIn.input.value = auto ? String(auto) : '';
+      const ppu = ppuVal();
+      if (portionTouched) {
+        const g = Number(portionIn.input.value) || 0;
+        poidsIn.input.value = g > 0 ? String(Math.round(g * ppu)) : '';
+      } else {
+        const poids = Number(poidsIn.input.value) || 0;
+        portionIn.input.value = poids > 0 ? String(Math.round(poids / ppu)) : '';
       }
       const g = currentPortion();
+      const unites = Math.max(0, Number(stockIn.input.value) || 0);
+      clear(preview);
+
+      if (g <= 0) {
+        // Sans poids, toute conversion 100 g → portion serait une invention.
+        preview.append(h('div', { class: 'scan-preview__line scan-preview__line--warn' },
+          'Taille d\'une portion inconnue : renseigne le poids du paquet, ou celui d\'une portion.'));
+        return;
+      }
+
       const r = g / 100;
       const kcal = Math.round((Number(kcalIn.input.value) || 0) * r);
       const prot = Math.round((Number(protIn.input.value) || 0) * r * 10) / 10;
-      const unites = Math.max(0, Number(stockIn.input.value) || 0);
-      const ppu = Math.max(1, Number(ppuIn.input.value) || 1);
-      const hint = portionIn.input.value
-        ? (portionTouched ? '' : ' (déduit de l\'unité de vente)')
-        : ' (valeur par défaut, faute de contenance lisible)';
-      clear(preview);
       preview.append(
         h('div', { class: 'scan-preview__line' },
-          '1 portion ≈ ', h('b', {}, `${num(g)} g`), hint),
+          '1 portion = ', h('b', {}, `${num(g)} g`),
+          portionTouched ? '' : ' (déduit du paquet)'),
         h('div', { class: 'scan-preview__line' },
           '→ ', h('b', {}, `${num(kcal)} kcal`), ' · ', h('b', {}, `${num(prot)} g`), ' de protéines par portion'),
         h('div', { class: 'scan-preview__line scan-preview__line--faint' },
@@ -242,7 +261,7 @@ export function openScan(ctx) {
             : 'Stock de départ : 0 → n\'apparaîtra pas dans « Mon stock »'),
       );
     }
-    [uniteIn, ppuIn, kcalIn, protIn, stockIn].forEach((f) =>
+    [ppuIn, kcalIn, protIn, stockIn].forEach((f) =>
       f.input.addEventListener('input', syncPortion));
 
     const glutenBox = h('input', { type: 'checkbox', checked: !!(fiche && fiche.flag_gluten === 'oui') });
@@ -273,8 +292,14 @@ export function openScan(ctx) {
     save.addEventListener('click', async () => {
       const nom = nomIn.input.value.trim();
       if (!nom) { errEl.textContent = 'Le nom est requis.'; nomIn.input.focus(); return; }
-      const ppu = Math.max(1, Number(ppuIn.input.value) || 1);
-      const r = currentPortion() / 100;
+      const portionG = currentPortion();
+      if (portionG <= 0) {
+        errEl.textContent = 'Il manque le poids du paquet ou celui d\'une portion : sans ça, les valeurs par portion seraient fausses.';
+        poidsIn.input.focus();
+        return;
+      }
+      const ppu = ppuVal();
+      const r = portionG / 100;
       const unites = Math.max(0, Number(stockIn.input.value) || 0);
       const produit = {
         nom, ean,
@@ -283,7 +308,7 @@ export function openScan(ctx) {
         kcal: Math.round((Number(kcalIn.input.value) || 0) * r),
         prot_g: Math.round((Number(protIn.input.value) || 0) * r * 10) / 10,
         fer_mg: Math.round(((fiche && fiche.fer_100g_mg) || 0) * r * 100) / 100,
-        unite_de_vente: uniteIn.input.value.trim(),
+        unite_de_vente: uniteAuto,
         portions_par_unite: ppu,
         flag_gluten: glutenBox.checked ? 'oui' : 'non',
         flag_lactose: lactoseBox.checked ? 'oui' : 'non',
@@ -296,7 +321,7 @@ export function openScan(ctx) {
 
     body.append(head,
       h('p', { class: 'scan-note' }, note),
-      nomIn.el, uniteIn.el, ppuIn.el, portionIn.el,
+      nomIn.el, ppuIn.el, poidsIn.el, portionIn.el,
       kcalIn.el, protIn.el, stockIn.el,
       preview, flags, errEl,
       h('div', { class: 'sheet__actions' },
@@ -327,6 +352,25 @@ export function openScan(ctx) {
   }
 
   showScanner();
+}
+
+/* ------------------------------------------------------------------ */
+/* Lot écrit en toutes lettres → nombre de portions + poids unitaire    */
+/* ------------------------------------------------------------------ */
+/**
+ * « 360 g (6 x 60 g) » → { n: 6, g: 60 }. Motif fréquent sur les lots (œufs,
+ * yaourts, tranches) : il donne d'un coup le nombre de portions et leur poids,
+ * les deux inconnues du formulaire. Renvoie null si le motif est absent.
+ */
+function parseLotG_(texte) {
+  const m = String(texte || '').toLowerCase()
+    .match(/(\d+)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*(kg|g|cl|ml|l)\b/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  const v = parseFloat(m[2].replace(',', '.'));
+  if (!Number.isFinite(n) || n < 1 || !Number.isFinite(v) || v <= 0) return null;
+  const mult = { kg: 1000, g: 1, l: 1000, cl: 10, ml: 1 }[m[3]];
+  return { n, g: Math.round(v * mult) };
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,9 +1,10 @@
 // Écran « Aujourd'hui » : jauges du JOUR + inventaire à curseurs.
-// Modèle inventaire : chaque curseur = niveau de stock (% du plein, ou nombre
-// d'unités pour les dénombrables). On baisse les curseurs au fil de la semaine ;
-// un seul bouton « Valider » enregistre les baisses (= consommation → nutrition).
-// Les curseurs modifiés sont surlignés jusqu'à validation.
-import { h, clear, num, macroChips } from './util.js';
+// Modèle inventaire : chaque curseur = PART DU PAQUET EN COURS déjà consommée
+// (0 → 100 %). Sa position est dérivée du stock, donc elle persiste après
+// validation : on la fait avancer au fil de la semaine, et la reculer corrige
+// une saisie erronée (remise au stock). Un seul bouton « Valider ».
+// Tout est en grammes ; les macros du catalogue sont pour 100 g.
+import { h, clear, num } from './util.js';
 import { rank } from './engine.js';
 import { openExterieur } from './exterieur.js';
 
@@ -56,67 +57,68 @@ function gaugesRow(jauges) {
 }
 
 /* ---------- Inventaire ---------- */
-/** Métadonnées de stock : plein (capacité), unité, dénombrable. */
+/**
+ * Repères de stock, tout en grammes. Le curseur exprime la part D'UN PAQUET
+ * consommée, jamais du stock entier : sinon sa position changerait de sens à
+ * chaque réappro, et il ne pourrait pas rester où on l'a laissé.
+ *
+ * 840 g de riz par paquets de 500 g = un paquet plein en réserve et un paquet
+ * entamé à 340 g → curseur à 32 %.
+ */
 function stockMeta(food) {
-  const committed = Math.max(0, Number(food.stock) || 0);
-  const unit = Math.max(1, Number(food.portions_par_unite) || 1);
-  const denombrable = !!food.denombrable;
-  // Plein = capacité arrondie au conteneur entier (au moins une unité de vente).
-  const full = Math.max(unit, Math.ceil(committed / unit) * unit) || 1;
-  return { committed, unit, denombrable, full };
-}
-
-/** Extrait la contenance (g/ml) de l'unité de vente, si présente. */
-function parseContenance(unite) {
-  const m = String(unite || '').toLowerCase().match(/(\d+(?:[.,]\d+)?)\s*(kg|g|cl|ml|l)\b/);
-  if (!m) return null;
-  const v = parseFloat(m[1].replace(',', '.'));
-  switch (m[2]) {
-    case 'kg': return { value: v * 1000, unit: 'g' };
-    case 'g':  return { value: v, unit: 'g' };
-    case 'l':  return { value: v * 1000, unit: 'ml' };
-    case 'cl': return { value: v * 10, unit: 'ml' };
-    case 'ml': return { value: v, unit: 'ml' };
-    default:   return null;
+  const stock = Math.max(0, Number(food.stock) || 0);
+  const paquet = Math.max(0, Number(food.paquet) || 0);
+  if (!(paquet > 0)) {
+    // Poids de paquet inconnu : repli sur « part du stock restant », sans
+    // mémoire de position. Dégradé assumé, annoncé dans le bloc info.
+    return { stock, paquet: 0, reserve: 0, ouvert: stock, pct: 0, inconnu: true };
   }
+  let entiers = Math.floor(stock / paquet);
+  let ouvert = stock - entiers * paquet;
+  // Multiple exact = paquet neuf, pas un paquet vide : on ouvre le suivant.
+  if (ouvert <= 0.0001 && stock > 0) { entiers -= 1; ouvert = paquet; }
+  return {
+    stock, paquet,
+    reserve: entiers * paquet,
+    ouvert,
+    pct: Math.round(((paquet - ouvert) / paquet) * 100),
+    inconnu: false,
+  };
 }
 
-/** Bloc info (toggle « ⓘ nutri ») : ce que représente une portion, macros, plein. */
+/** Bloc info (toggle « ⓘ nutri ») : état du paquet en cours et macros /100 g. */
 function infoBlock(food, meta) {
-  const cont = parseContenance(food.unite_de_vente);
-  const portionPct = Math.max(1, Math.round(100 / meta.full));
-  let l1 = meta.denombrable ? '1 unité' : '1 portion';
-  if (cont) l1 += ` ≈ ${num(cont.value / meta.unit)} ${cont.unit}`;
-  l1 += ` · ${portionPct} % du plein`;
-
-  const macroTxt = macroChips(food.macros).map(([k, v]) => `${v} ${k}`).join(' · ');
-  const plein = `plein : ${num(meta.full)} ${meta.denombrable ? 'unités' : 'portions'}`
-    + (food.unite_de_vente ? ` · ${food.unite_de_vente}` : '');
+  const m = food.macros || {};
+  const etat = meta.inconnu
+    ? `${num(Math.round(meta.stock))} g en stock · poids du paquet inconnu`
+    : `paquet de ${num(meta.paquet)} g · ${num(Math.round(meta.ouvert))} g restants dedans`
+      + (meta.reserve > 0 ? ` · ${num(Math.round(meta.reserve / meta.paquet))} d'avance` : '');
 
   return h('div', { class: 'inv-row__info' },
-    h('div', { class: 'inv-row__info-line' }, l1),
-    h('div', { class: 'inv-row__info-line' }, `${macroTxt} / portion`),
-    h('div', { class: 'inv-row__info-line inv-row__info-faint' }, plein),
+    h('div', { class: 'inv-row__info-line' }, etat),
+    h('div', { class: 'inv-row__info-line' },
+      `${num(m.kcal)} kcal · ${num(m.prot_g)} g prot · ${num(m.fer_mg)} mg fer / 100 g`),
   );
 }
 
-/** Construit une ligne d'inventaire. Le curseur = PART DU STOCK CONSOMMÉE
- *  (0 % → 100 %), remis à 0 après validation. Le stock restant est affiché à
- *  droite. Renvoie une API {el, isDirty, reset, getChange}. */
+/** Construit une ligne d'inventaire. Le curseur = PART DU PAQUET EN COURS déjà
+ *  consommée. Sa position est DÉRIVÉE du stock, elle n'est donc pas remise à
+ *  zéro après validation : elle reste là où le stock l'amène, et le reculer
+ *  corrige une erreur de saisie.
+ *  Renvoie une API {el, isDirty, reset, getChange}. */
 function invRow(food, onChange) {
   const meta = stockMeta(food);
   const m = food.macros || {};
-  const isCount = meta.denombrable;
-  const stock = meta.committed;
-  const max = isCount ? Math.max(0, Math.floor(stock)) : 100;
+  // Référence des 100 % du curseur : un paquet, ou à défaut le stock restant.
+  const ref = meta.paquet > 0 ? meta.paquet : meta.stock;
+  const depart = meta.pct;
 
-  const noun = (n) => (isCount ? 'unité' : 'portion') + (Math.abs(n) > 1 ? 's' : '');
-  const level = h('span', { class: 'inv-row__level' }, `${num(stock)} ${noun(stock)}`);
+  const level = h('span', { class: 'inv-row__level' }, `${num(Math.round(meta.stock))} g`);
   const delta = h('div', { class: 'inv-row__delta', hidden: true });
   const slider = h('input', {
     type: 'range', class: 'inv-row__slider',
-    min: '0', max: String(max), step: '1', value: '0',
-    'aria-label': `Part consommée de ${food.nom}`,
+    min: '0', max: '100', step: '1', value: String(depart),
+    'aria-label': `Part du paquet consommée — ${food.nom}`,
   });
 
   const row = h('div', { class: 'inv-row', id: `food-${food.id}` },
@@ -130,22 +132,25 @@ function invRow(food, onChange) {
   );
 
   const val = () => Number(slider.value);
-  const dirty = () => val() > 0;
-  const consumed = (v) => (isCount ? v : (v / 100) * stock);   // portions consommées
+  const dirty = () => val() !== depart;
+  // Grammes en jeu depuis la position validée : > 0 mangé, < 0 correction.
+  const grammes = () => ((val() - depart) / 100) * ref;
 
   function renderLevel() {
-    const v = val();
-    const isDirty = v > 0;
-    row.classList.toggle('is-dirty', isDirty);
-    if (isDirty) {
-      const d = Math.round(consumed(v) * 100) / 100;
-      const pct = isCount ? '' : `${v} % · `;
+    const g = grammes();
+    row.classList.toggle('is-dirty', dirty());
+    if (!dirty()) { delta.hidden = true; return; }
+    const r = Math.abs(g) / 100;
+    if (g > 0) {
       delta.className = 'inv-row__delta is-eat';
-      delta.textContent = `🍽 ${pct}${num(d)} ${noun(d)} · ${num(m.kcal * d)} kcal · ${num(m.prot_g * d)} g prot`;
-      delta.hidden = false;
+      delta.textContent = `🍽 ${num(Math.round(g))} g · ${num(Math.round(m.kcal * r))} kcal · `
+        + `${num(Math.round(m.prot_g * r * 10) / 10)} g prot`;
     } else {
-      delta.hidden = true;
+      // Reculer le curseur = « je n'avais pas mangé ça » → remise au stock.
+      delta.className = 'inv-row__delta is-undo';
+      delta.textContent = `↩ correction : ${num(Math.round(-g))} g remis en stock`;
     }
+    delta.hidden = false;
   }
   // Le curseur ne bouge que si la prise démarre SUR la pastille. Sans ça, un
   // appui n'importe où sur la piste fait sauter la valeur d'un coup, et le
@@ -166,11 +171,12 @@ function invRow(food, onChange) {
   return {
     el: row,
     isDirty: dirty,
-    reset() { slider.value = '0'; renderLevel(); },
+    // Annuler = revenir à la position que le stock impose, pas à zéro.
+    reset() { slider.value = String(depart); renderLevel(); },
     getChange() {
       if (!dirty()) return null;
-      const d = Math.round(consumed(val()) * 1000) / 1000; // portions consommées (>0)
-      return { food, ref: food.id, delta: d, newStock: stock - d, macros: food.macros };
+      const d = Math.round(grammes() * 100) / 100;   // grammes, signé
+      return { food, ref: food.id, delta: d, newStock: meta.stock - d, macros: food.macros };
     },
   };
 }
@@ -214,7 +220,7 @@ function exterieurBlock(exterieurs, onExterieur) {
 
 /**
  * @param root  conteneur
- * @param model { state, foods:[{id,nom,kind,macros,stock,portions_par_unite,denombrable}], exterieurs:[...] }
+ * @param model { state, foods:[{id,nom,kind,macros,stock,paquet}], exterieurs:[...] }
  * @param handlers { onCommit(changes), onExterieur(macros) }
  */
 export function renderToday(root, model, handlers) {

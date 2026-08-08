@@ -38,32 +38,42 @@ function buildModel(state, catalog) {
   const stock = state.stock || {};
   const plats = catalog.plats || [];
 
+  // Tout est en grammes ; les macros sont POUR 100 g (cf. Code.gs, en-tête).
+  // `paquet` est la référence du curseur : il exprime le pourcentage d'UN
+  // paquet consommé, pas du stock total, sinon la position ne voudrait plus
+  // rien dire dès qu'on rachète.
+  const macros100 = (x) => ({
+    kcal: Number(x.kcal_100g) || 0,
+    prot_g: Number(x.prot_100g) || 0,
+    fer_mg: Number(x.fer_100g_mg) || 0,
+  });
+
   const foods = (catalog.produits || []).map((pr) => ({
     id: pr.id,
     nom: pr.nom,
     kind: 'produit',
     ean: String(pr.ean || '').replace(/\D/g, ''),
-    macros: { kcal: Number(pr.kcal) || 0, prot_g: Number(pr.prot_g) || 0, fer_mg: Number(pr.fer_mg) || 0 },
-    stock: Number(stock[pr.id]) || 0,
-    portions_par_unite: Number(pr.portions_par_unite) || 1,
-    unite_de_vente: pr.unite_de_vente || '',
-    denombrable: pr.denombrable === true || String(pr.denombrable).toLowerCase() === 'oui',
+    macros: macros100(pr),
+    stock: Number(stock[pr.id]) || 0,          // grammes
+    paquet: Number(pr.poids_paquet_g) || 0,    // 0 = poids inconnu
   }));
 
-  // Plats batch cuisinés = articles de stock (en portions), au curseur comme le
-  // reste. Manger une portion = log `plat` (décrémente le stock du plat batch).
+  // Plats batch cuisinés = articles de stock au curseur, comme le reste. Leur
+  // « paquet » est la fournée, dont le poids vient du backend (somme des
+  // ingrédients). Manger = log `plat` en grammes.
   for (const pl of plats) {
     if (String(pl.type) !== 'batch') continue;
     const s = Number(stock[pl.id]) || 0;
     if (s <= 0) continue;                    // pas cuisiné / épuisé → absent de l'inventaire
     foods.push({
       id: pl.id, nom: pl.nom, kind: 'plat', ean: '',
-      macros: { kcal: Number(pl.kcal) || 0, prot_g: Number(pl.prot_g) || 0, fer_mg: Number(pl.fer_mg) || 0 },
-      stock: s, portions_par_unite: 1, unite_de_vente: 'portion', denombrable: true,
+      macros: macros100(pl),
+      stock: s, paquet: Number(pl.poids_fournee_g) || 0,
     });
   }
 
-  // Presets « repas extérieur » (resto léger/normal/copieux, valeurs sourcées).
+  // Presets « repas extérieur » : macros ABSOLUES d'un repas, pas pour 100 g —
+  // il n'y a ni paquet ni poids à peser au restaurant.
   const exterieurs = plats.filter((pl) => String(pl.type) === 'exterieur').map((pl) => ({
     id: pl.id, nom: pl.nom,
     macros: { kcal: Number(pl.kcal) || 0, prot_g: Number(pl.prot_g) || 0, fer_mg: Number(pl.fer_mg) || 0 },
@@ -356,7 +366,8 @@ async function commitChanges(changes) {
 
   // Optimiste : jauges + stock local.
   for (const c of changes) {
-    if (c.delta > 0) applyMacros(M.state, c.macros, c.delta, +1);
+    // Macros pour 100 g, delta en grammes → facteur delta/100.
+    if (c.delta > 0) applyMacros(M.state, c.macros, c.delta / 100, +1);
     const f = M.foods.find((x) => x.id === c.ref);
     if (f) f.stock = Math.round(c.newStock * 1000) / 1000;
   }

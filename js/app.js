@@ -45,7 +45,6 @@ function buildModel(state, catalog) {
   const macros100 = (x) => ({
     kcal: Number(x.kcal_100g) || 0,
     prot_g: Number(x.prot_100g) || 0,
-    fer_mg: Number(x.fer_100g_mg) || 0,
   });
 
   const foods = (catalog.produits || []).map((pr) => ({
@@ -76,7 +75,7 @@ function buildModel(state, catalog) {
   // il n'y a ni paquet ni poids à peser au restaurant.
   const exterieurs = plats.filter((pl) => String(pl.type) === 'exterieur').map((pl) => ({
     id: pl.id, nom: pl.nom,
-    macros: { kcal: Number(pl.kcal) || 0, prot_g: Number(pl.prot_g) || 0, fer_mg: Number(pl.fer_mg) || 0 },
+    macros: { kcal: Number(pl.kcal) || 0, prot_g: Number(pl.prot_g) || 0},
   }));
 
   return { state, foods, exterieurs };
@@ -204,8 +203,8 @@ async function validerCourses(items) {
   try {
     const res = await logCourses(items);
     const reverse = res && Array.isArray(res.courses_validees)
-      ? res.courses_validees.map((a) => ({ produit_id: a.produit_id, portions: Number(a.portions) || 0 }))
-      : items.map((i) => ({ produit_id: i.produit_id, portions: Number(i.unites) || 0 }));
+      ? res.courses_validees.map((a) => ({ produit_id: a.produit_id, grammes: Number(a.grammes) || 0 }))
+      : items.map((i) => ({ produit_id: i.produit_id, grammes: Number(i.grammes) || 0 }));
     store.setLastCourses({ at: Date.now(), reverse });   // pour l'annulation
     const n = items.length;
     toast(`${n} article${n > 1 ? 's' : ''} ajouté${n > 1 ? 's' : ''} au stock`, 'ok');
@@ -215,7 +214,7 @@ async function validerCourses(items) {
     if (isOffline(err)) {
       enqueue({ action: 'log', type: 'courses', items });
       toast('Hors-ligne — validation mise en file', 'err');
-      // Pas d'annulation hors-ligne : les portions exactes ne sont connues qu'à la réponse backend.
+      // Pas d'annulation hors-ligne : les grammes exacts ne sont connus qu'à la réponse backend.
     } else {
       toast(describeError(err), 'err');
     }
@@ -227,14 +226,14 @@ async function undoCourses() {
   const last = store.getLastCourses();
   if (!last || !last.reverse || !last.reverse.length) return;
   try {
-    await Promise.all(last.reverse.map((r) => adjustStock(r.produit_id, -Number(r.portions) || 0)));
+    await Promise.all(last.reverse.map((r) => adjustStock(r.produit_id, -Number(r.grammes) || 0)));
     store.clearLastCourses();
     M = null;
     toast('Dernières courses annulées', 'ok');
     renderCoursesScreen();          // recharge : les articles annulés réapparaissent
   } catch (err) {
     if (isOffline(err)) {
-      last.reverse.forEach((r) => enqueue({ action: 'log', type: 'ajustement', ref: r.produit_id, delta: -Number(r.portions) || 0 }));
+      last.reverse.forEach((r) => enqueue({ action: 'log', type: 'ajustement', ref: r.produit_id, delta: -Number(r.grammes) || 0 }));
       store.clearLastCourses();
       toast('Hors-ligne — annulation mise en file', 'err');
       renderCoursesScreen();
@@ -287,13 +286,13 @@ async function renderCuisineScreen() {
 /** « Je l'ai cuisinée » : POST batch_cuisine (+stock du plat batch). */
 async function cuisinerBatch(rec) {
   const ref = rec.recette_id || rec.plat_id;
-  const portions = Number(rec.portions_produites) || 0;
+  const poids = Number(rec.poids_produit_g) || 0;
   try {
     await logBatch(ref);
-    const label = portions ? `+${num(portions)} portion${portions > 1 ? 's' : ''}` : 'cuisiné';
+    const label = poids ? `+${num(Math.round(poids))} g` : 'cuisiné';
     toast(`${rec.nom} — ${label}`, 'ok');
     M = null;                                 // le stock du plat batch a changé → Aujourd'hui se rechargera
-    if (IS_DEMO) { bumpCuisineLocal(rec, portions); renderCuisine(appEl, CuisineData, cuisineHandlers); }
+    if (IS_DEMO) { bumpCuisineLocal(rec, poids); renderCuisine(appEl, CuisineData, cuisineHandlers); }
     else renderCuisineScreen();               // recharge la vérité backend (stock, dernière réalisation, compteurs)
   } catch (err) {
     if (isOffline(err)) {
@@ -307,12 +306,12 @@ async function cuisinerBatch(rec) {
 }
 
 /** Reflet optimiste local (démo : la fixture est statique, on simule le +stock). */
-function bumpCuisineLocal(rec, portions) {
+function bumpCuisineLocal(rec, poids) {
   if (!CuisineData) return;
   const today = new Date().toISOString().slice(0, 10);
   const bump = (r) => {
     if (!r) return;
-    r.stock_portions = Math.round(((Number(r.stock_portions) || 0) + portions) * 10) / 10;
+    r.stock_g = Math.round((Number(r.stock_g) || 0) + poids);
     r.derniere_realisation = today;
     r.jamais_cuisinee = false; r.nouveau = false;
   };
@@ -456,26 +455,25 @@ function foodByEan(ean) {
   const st = (M && M.state && M.state.stock) || (cs && cs.state && cs.state.stock) || {};
   return {
     id: pr.id, nom: pr.nom, ean: code,
-    macros: { kcal: Number(pr.kcal) || 0, prot_g: Number(pr.prot_g) || 0, fer_mg: Number(pr.fer_mg) || 0 },
+    macros: { kcal: Number(pr.kcal_100g) || 0, prot_g: Number(pr.prot_100g) || 0 },
     stock: Number(st[pr.id]) || 0,
-    // Nécessaires à la feuille de scan pour convertir « unités » → portions.
-    unite_de_vente: pr.unite_de_vente || '',
-    portions_par_unite: Number(pr.portions_par_unite) || 1,
+    // Nécessaire à la feuille de scan pour convertir « N paquets » → grammes.
+    paquet: Number(pr.poids_paquet_g) || 0,
   };
 }
 
 /**
- * Réappro depuis le scan : « j'en ai N unités » → +N × portions_par_unite au
+ * Réappro depuis le scan : « j'en ai N paquets » → +N × poids_paquet_g au
  * stock. Réutilise l'endpoint « courses » (même sémantique côté Sheet).
  */
 async function restockAction(food, unites) {
-  const ppu = Math.max(1, Number(food.portions_par_unite) || 1);
-  const portions = Math.max(1, Number(unites) || 1) * ppu;
+  const paquet = Math.max(0, Number(food.paquet) || 0);
+  const grammes = Math.max(1, Number(unites) || 1) * paquet;
   const f = M && M.foods && M.foods.find((x) => x.id === food.id);
-  if (f) { f.stock = (Number(f.stock) || 0) + portions; if (currentScreen === 'today') paint(); }
+  if (f) { f.stock = (Number(f.stock) || 0) + grammes; if (currentScreen === 'today') paint(); }
   try {
     await logCourses([{ produit_id: food.id, unites: Math.max(1, Number(unites) || 1) }]);
-    toast(`${food.nom} — +${num(portions)} portions`, 'ok');
+    toast(`${food.nom} — +${num(Math.round(grammes))} g`, 'ok');
     M = null; CoursesData = null; refreshCurrent();
   } catch (err) {
     if (isOffline(err)) {
@@ -542,7 +540,6 @@ function applyMacros(state, macros = {}, qty = 1, sign = +1) {
     g.ratio = g.cible > 0 ? Math.round((valeur / g.cible) * 100) / 100 : g.ratio;
   };
   bump(j.prot_g, macros.prot_g);
-  bump(j.fer_mg, macros.fer_mg);
   bump(j.kcal, macros.kcal);
 }
 

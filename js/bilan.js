@@ -1,4 +1,4 @@
-// Écran « Bilan » (lecture seule) : moyennes journalières hebdo prot/fer/kcal vs
+// Écran « Bilan » (lecture seule) : moyennes journalières hebdo prot/kcal vs
 // cibles sur 4 semaines glissantes + streak protéines (SPEC §4.4, §7).
 // Graphiques SVG maison, zéro dépendance.
 import { h, clear, num, frDate } from './util.js';
@@ -6,7 +6,6 @@ import { h, clear, num, frDate } from './util.js';
 const METRICS = [
   { key: 'prot_g', label: 'Protéines', unit: 'g',    kind: 'prot' },
   { key: 'kcal',   label: 'Calories',  unit: 'kcal', kind: 'kcal' },
-  { key: 'fer_mg', label: 'Fer',       unit: 'mg',   kind: 'fer'  },
 ];
 
 /** Mini graphe en barres (une barre par semaine) + ligne de cible. */

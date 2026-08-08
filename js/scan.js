@@ -11,8 +11,8 @@
 //
 // Deux règles à ne pas perdre de vue dans ce fichier :
 //   1. OpenFoodFacts donne des valeurs POUR 100 g. Le Sheet, lui, stocke des
-//      valeurs PAR PORTION. La conversion se fait ici (portion en g), jamais
-//      implicitement.
+//      valeurs POUR 100 g, et le Sheet aussi : plus aucune conversion ici. Le
+//      seul chiffre à connaître est le poids du paquet.
 //   2. Un produit ajouté sans stock initial n'apparaît pas dans « Mon stock »
 //      (l'inventaire ne liste que stock > 0) → on demande toujours la quantité.
 //
@@ -128,8 +128,7 @@ export function openScan(ctx) {
   function showKnown(food, ean) {
     clear(body);
     const chips = macroChips(food.macros || {});
-    const ppu = Math.max(1, Number(food.portions_par_unite) || 1);
-    const uniteLabel = food.unite_de_vente || 'unité';
+    const paquet = Math.max(0, Number(food.paquet) || 0);
 
     let unites = 1;
     const valEl = h('span', { class: 'stepper__val' }, num(unites));
@@ -140,7 +139,7 @@ export function openScan(ctx) {
       unites = Math.max(1, u);
       valEl.textContent = num(unites);
       dec.disabled = unites <= 1;
-      apport.textContent = `+ ${num(unites * ppu)} portion${unites * ppu > 1 ? 's' : ''} au stock`;
+      apport.textContent = paquet > 0 ? `+ ${num(unites * paquet)} g au stock` : 'poids du paquet inconnu';
     };
     dec.addEventListener('click', () => applyQty(unites - 1));
     inc.addEventListener('click', () => applyQty(unites + 1));
@@ -149,7 +148,7 @@ export function openScan(ctx) {
     const addBtn = h('button', { class: 'btn btn--primary', type: 'button' }, 'Ajouter à mon stock');
     addBtn.addEventListener('click', async () => {
       addBtn.disabled = true;
-      try { await ctx.onRestock(food, unites); showDone(`${food.nom} — ${num(unites * ppu)} portions ajoutées`); }
+      try { await ctx.onRestock(food, unites); showDone(`${food.nom} — ${num(unites * paquet)} g ajoutés`); }
       catch (err) { addBtn.disabled = false; toast(err instanceof ApiError ? err.message : 'Ajout impossible', 'err'); }
     });
 
@@ -166,7 +165,7 @@ export function openScan(ctx) {
         h('div', { class: 'scan-hit__nom' }, food.nom),
         h('div', { class: 'scan-hit__stock' },
           food.stock > 0
-            ? `En stock : ${num(food.stock)} portion${food.stock > 1 ? 's' : ''}`
+            ? `En stock : ${num(Math.round(food.stock))} g`
             : 'Stock à zéro'),
         chips.length ? h('div', { class: 'scan-hit__macros' },
           ...chips.map(([k, v]) => h('span', {}, h('b', {}, v), ' ', k))) : null,
@@ -193,76 +192,53 @@ export function openScan(ctx) {
 
     const nomIn = field_('Nom du produit', fiche && fiche.nom, 'text',
       fiche && fiche.marque ? `Marque : ${fiche.marque}` : 'Tel qu\'il apparaîtra dans l\'app.');
-    // Le lot est parfois écrit en toutes lettres — « 360 g (6 x 60 g) ». Quand
-    // c'est le cas, il donne d'un coup le nombre de portions ET leur poids.
-    const lot = parseLotG_(fiche && fiche.quantite);
+    // Un seul poids à connaître : celui du paquet. Tout le reste s'en déduit —
+    // il n'y a plus ni portion ni unité de vente (modèle du 2026-08-08).
     const poidsInit = (fiche && fiche.poids_net_g)
-      || (lot ? lot.n * lot.g : 0)
       || parseContenanceG_(fiche && fiche.quantite)
       || '';
-    // Étiquette affichée dans Courses et dans « j'en ai N boîtes ». Reprise telle
-    // quelle d'OpenFoodFacts : elle ne sert plus à aucun calcul, donc pas de champ.
-    const uniteAuto = (fiche && fiche.quantite) || '';
 
-    const ppuIn = field_('Portions par unité', lot ? lot.n : 1, 'number',
-      'Ce que tu comptes comme une portion : 6 pour une boîte de 6 œufs, 10 pour 10 tranches.');
-    const poidsIn = field_('Poids net du paquet (g)', poidsInit, 'number',
-      'Ce qui est marqué sur l\'emballage. Laisse vide si tu ne l\'as pas.');
-    const portionIn = field_('Taille d\'une portion (g)', lot ? lot.g : '', 'number',
-      'Le poids d\'un œuf, d\'une tranche… Se déduit du paquet, mais tu peux l\'écrire directement.');
+    const poidsIn = field_('Poids du paquet (g)', poidsInit, 'number',
+      'Le chiffre indispensable : sans lui, aucun apport ne peut être calculé.');
     const kcalIn = field_('kcal pour 100 g', fiche ? fiche.kcal_100g : '', 'number', null);
     const protIn = field_('Protéines pour 100 g (g)', fiche ? fiche.prot_100g : '', 'number', null);
-    const stockIn = field_('Tu en as combien ? (unités)', 1, 'number',
-      'Ce que tu as sous la main maintenant. À 0, le produit n\'apparaîtra pas dans « Mon stock ».');
+    const fibresIn = field_('Fibres pour 100 g (g)',
+      fiche && fiche.fibres_100g != null ? fiche.fibres_100g : '', 'number',
+      'Facultatif, souvent absent des étiquettes. Enregistré pour plus tard — aucune jauge ne l\'affiche aujourd\'hui.');
+    const stockIn = field_('Combien de paquets as-tu ?', 1, 'number',
+      'À 0, le produit n\'apparaîtra pas dans « Mon stock ».');
 
-    // Poids du paquet et taille de portion se déduisent l'un de l'autre via le
-    // nombre de portions : le dernier des deux saisi à la main fait foi. Aucune
-    // valeur par défaut n'est inventée — sans l'un des deux, on le dit et on bloque.
-    let portionTouched = false;
-    portionIn.input.addEventListener('input', () => { portionTouched = true; syncPortion(); });
-    poidsIn.input.addEventListener('input', () => { portionTouched = false; syncPortion(); });
-
-    const ppuVal = () => Math.max(1, Number(ppuIn.input.value) || 1);
-    const currentPortion = () => Number(portionIn.input.value) || 0;
+    const poidsVal = () => Number(poidsIn.input.value) || 0;
 
     const preview = h('div', { class: 'scan-preview' });
-    function syncPortion() {
-      const ppu = ppuVal();
-      if (portionTouched) {
-        const g = Number(portionIn.input.value) || 0;
-        poidsIn.input.value = g > 0 ? String(Math.round(g * ppu)) : '';
-      } else {
-        const poids = Number(poidsIn.input.value) || 0;
-        portionIn.input.value = poids > 0 ? String(Math.round(poids / ppu)) : '';
-      }
-      const g = currentPortion();
-      const unites = Math.max(0, Number(stockIn.input.value) || 0);
+    function syncPreview() {
+      const poids = poidsVal();
+      const paquets = Math.max(0, Number(stockIn.input.value) || 0);
       clear(preview);
 
-      if (g <= 0) {
-        // Sans poids, toute conversion 100 g → portion serait une invention.
+      if (poids <= 0) {
+        // Aucun apport n'est calculable sans poids : on le dit plutôt que de
+        // laisser croire à un produit correctement enregistré.
         preview.append(h('div', { class: 'scan-preview__line scan-preview__line--warn' },
-          'Taille d\'une portion inconnue : renseigne le poids du paquet, ou celui d\'une portion.'));
+          'Poids du paquet manquant : les apports ne pourront pas être calculés.'));
         return;
       }
 
-      const r = g / 100;
+      const r = poids / 100;
       const kcal = Math.round((Number(kcalIn.input.value) || 0) * r);
       const prot = Math.round((Number(protIn.input.value) || 0) * r * 10) / 10;
       preview.append(
         h('div', { class: 'scan-preview__line' },
-          '1 portion = ', h('b', {}, `${num(g)} g`),
-          portionTouched ? '' : ' (déduit du paquet)'),
-        h('div', { class: 'scan-preview__line' },
-          '→ ', h('b', {}, `${num(kcal)} kcal`), ' · ', h('b', {}, `${num(prot)} g`), ' de protéines par portion'),
+          'Un paquet entier = ', h('b', {}, `${num(kcal)} kcal`), ' · ',
+          h('b', {}, `${num(prot)} g`), ' de protéines'),
         h('div', { class: 'scan-preview__line scan-preview__line--faint' },
-          unites > 0
-            ? `Stock de départ : ${num(unites * ppu)} portion${unites * ppu > 1 ? 's' : ''}`
+          paquets > 0
+            ? `Stock de départ : ${num(Math.round(paquets * poids))} g`
             : 'Stock de départ : 0 → n\'apparaîtra pas dans « Mon stock »'),
       );
     }
-    [ppuIn, kcalIn, protIn, stockIn].forEach((f) =>
-      f.input.addEventListener('input', syncPortion));
+    [poidsIn, kcalIn, protIn, stockIn].forEach((f) =>
+      f.input.addEventListener('input', syncPreview));
 
     const glutenBox = h('input', { type: 'checkbox', checked: !!(fiche && fiche.flag_gluten === 'oui') });
     const lactoseBox = h('input', { type: 'checkbox', checked: !!(fiche && fiche.flag_lactose === 'oui') });
@@ -276,7 +252,7 @@ export function openScan(ctx) {
     let head; let note;
     if (fiche) {
       head = h('div', { class: 'scan-hit__tag scan-hit__tag--new' }, `Nouveau${suffix}`);
-      note = 'Fiche OpenFoodFacts pré-remplie. Vérifie surtout la portion et la quantité.';
+      note = 'Fiche OpenFoodFacts pré-remplie. Vérifie surtout le poids du paquet.';
     } else if (offErr) {
       head = h('div', { class: 'scan-hit__tag scan-hit__tag--warn' }, `Recherche impossible${suffix}`);
       note = `${offErr} — le produit n'est pas forcément inconnu. Tu peux réessayer plus tard, ou saisir les infos à la main.`;
@@ -292,42 +268,42 @@ export function openScan(ctx) {
     save.addEventListener('click', async () => {
       const nom = nomIn.input.value.trim();
       if (!nom) { errEl.textContent = 'Le nom est requis.'; nomIn.input.focus(); return; }
-      const portionG = currentPortion();
-      if (portionG <= 0) {
-        errEl.textContent = 'Il manque le poids du paquet ou celui d\'une portion : sans ça, les valeurs par portion seraient fausses.';
+      const poids = poidsVal();
+      if (poids <= 0) {
+        errEl.textContent = 'Le poids du paquet est requis : sans lui, aucun apport ne peut être calculé.';
         poidsIn.input.focus();
         return;
       }
-      const ppu = ppuVal();
-      const r = portionG / 100;
-      const unites = Math.max(0, Number(stockIn.input.value) || 0);
+      const paquets = Math.max(0, Number(stockIn.input.value) || 0);
+      const fibres = fibresIn.input.value.trim();
       const produit = {
         nom, ean,
         marque_magasin: (fiche && fiche.marque) || '',
-        // Conversion 100 g → portion : c'est ce que le Sheet attend (SPEC §3).
-        kcal: Math.round((Number(kcalIn.input.value) || 0) * r),
-        prot_g: Math.round((Number(protIn.input.value) || 0) * r * 10) / 10,
-        fer_mg: Math.round(((fiche && fiche.fer_100g_mg) || 0) * r * 100) / 100,
-        unite_de_vente: uniteAuto,
-        portions_par_unite: ppu,
+        // Le Sheet stocke tout POUR 100 g ; aucune conversion ici.
+        kcal_100g: Number(kcalIn.input.value) || 0,
+        prot_100g: Number(protIn.input.value) || 0,
+        // Vide (pas 0) si non renseigné : « sans fibres » et « inconnu » doivent
+        // rester distinguables le jour où la jauge fibres arrivera.
+        fibres_100g: fibres === '' ? '' : Number(fibres),
+        poids_paquet_g: poids,
         flag_gluten: glutenBox.checked ? 'oui' : 'non',
         flag_lactose: lactoseBox.checked ? 'oui' : 'non',
-        stock_initial: unites * ppu,
+        stock_initial: Math.round(paquets * poids),
       };
       save.disabled = true; errEl.textContent = '';
-      try { await ctx.onAddProduit(produit); showDone(`« ${nom} » ajouté avec ${num(unites * ppu)} portions`); }
+      try { await ctx.onAddProduit(produit); showDone(`« ${nom} » ajouté avec ${num(Math.round(paquets * poids))} g en stock`); }
       catch (err) { save.disabled = false; errEl.textContent = (err instanceof ApiError ? err.message : 'Ajout impossible'); }
     });
 
     body.append(head,
       h('p', { class: 'scan-note' }, note),
-      nomIn.el, ppuIn.el, poidsIn.el, portionIn.el,
-      kcalIn.el, protIn.el, stockIn.el,
+      nomIn.el, poidsIn.el,
+      kcalIn.el, protIn.el, fibresIn.el, stockIn.el,
       preview, flags, errEl,
       h('div', { class: 'sheet__actions' },
         h('button', { class: 'btn btn--ghost', type: 'button', onclick: () => showScanner() }, 'Annuler'),
         save));
-    syncPortion();
+    syncPreview();
     setTimeout(() => nomIn.input.focus(), 60);
   }
 

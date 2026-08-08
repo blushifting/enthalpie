@@ -13,7 +13,7 @@ const C = 2 * Math.PI * R;
 
 /* ---------- Jauges (apports du jour) ---------- */
 function gauge({ kind, label, unit, valeur, cible, ratio }) {
-  const isInfo = ratio == null;                     // fer : informatif, pas de cible
+  const isInfo = ratio == null;                     // réservé : jauge sans cible chiffrée
   const over = !isInfo && valeur > cible && cible > 0;
   const clamped = isInfo ? 0 : Math.max(0, Math.min(1, ratio || 0));
   const offset = C * (1 - clamped);
@@ -49,8 +49,6 @@ function gaugesRow(jauges) {
   return h('section', { class: 'gauges', 'aria-label': 'Apports du jour' },
     gauge({ kind: 'prot', label: 'Protéines', unit: 'g',
       valeur: jauges.prot_g.valeur, cible: jauges.prot_g.cible, ratio: jauges.prot_g.ratio }),
-    gauge({ kind: 'fer', label: 'Fer', unit: 'mg',
-      valeur: jauges.fer_mg.valeur, cible: jauges.fer_mg.cible, ratio: jauges.fer_mg.ratio }),
     gauge({ kind: 'kcal', label: 'Calories', unit: 'kcal',
       valeur: jauges.kcal.valeur, cible: jauges.kcal.cible, ratio: jauges.kcal.ratio }),
   );
@@ -97,7 +95,7 @@ function infoBlock(food, meta) {
   return h('div', { class: 'inv-row__info' },
     h('div', { class: 'inv-row__info-line' }, etat),
     h('div', { class: 'inv-row__info-line' },
-      `${num(m.kcal)} kcal · ${num(m.prot_g)} g prot · ${num(m.fer_mg)} mg fer / 100 g`),
+      `${num(m.kcal)} kcal · ${num(m.prot_g)} g prot / 100 g`),
   );
 }
 

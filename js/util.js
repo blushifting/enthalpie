@@ -43,7 +43,6 @@ export function macroChips(m = {}) {
   const chips = [];
   if (m.prot_g != null) chips.push(['prot', `${num(m.prot_g)} g`]);
   if (m.kcal != null)   chips.push(['kcal', `${num(m.kcal)}`]);
-  if (m.fer_mg != null && Number(m.fer_mg) > 0) chips.push(['fer', `${num(m.fer_mg)} mg`]);
   return chips;
 }
 

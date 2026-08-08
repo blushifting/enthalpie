@@ -3,3 +3,8 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
+
+# clasp — identifiants du projet Apps Script (dépôt public : on ne les publie pas)
+.clasp.json
+.clasprc.json
+backend/.deployment-id

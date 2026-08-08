@@ -1,0 +1,5 @@
+# Seuls les fichiers Apps Script sont poussés vers le projet distant.
+**/**
+!Code.gs
+!SeedCatalogue.gs
+!appsscript.json

@@ -147,6 +147,19 @@ function invRow(food, onChange) {
       delta.hidden = true;
     }
   }
+  // Le curseur ne bouge que si la prise démarre SUR la pastille. Sans ça, un
+  // appui n'importe où sur la piste fait sauter la valeur d'un coup, et le
+  // moindre frôlement en faisant défiler la liste déplace un curseur au hasard.
+  // (Le défilement vertical, lui, est rendu au navigateur par touch-action.)
+  const THUMB_PX = 30;   // diamètre de la pastille, cf. styles.css
+  slider.addEventListener('pointerdown', (e) => {
+    const r = slider.getBoundingClientRect();
+    const maxV = Number(slider.max) || 0;
+    const ratio = maxV > 0 ? Number(slider.value) / maxV : 0;
+    const centre = r.left + THUMB_PX / 2 + ratio * (r.width - THUMB_PX);
+    if (Math.abs(e.clientX - centre) > THUMB_PX) e.preventDefault();
+  });
+
   slider.addEventListener('input', () => { renderLevel(); onChange(); });
   renderLevel();
 

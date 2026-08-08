@@ -15,7 +15,7 @@ import { store } from './store.js';
 
 /**
  * @param root      conteneur
- * @param data      { horizon_jours, groupes:{magasin:[ligne]}, lignes:[{produit_id,nom,magasin,unites,unite_de_vente,portions_manquantes}] }
+ * @param data      { horizon_jours, groupes:{magasin:[ligne]}, lignes:[{produit_id,nom,magasin,unites,poids_paquet_g,grammes_manquants}] }
  * @param handlers  { onValider(items), onUndo(), onExclure(id, nom) }
  */
 export function renderCourses(root, data, handlers) {
@@ -92,8 +92,8 @@ export function renderCourses(root, data, handlers) {
           h('div', { class: 'crs-row__body' },
             h('label', { class: 'crs-row__head' }, box, h('span', { class: 'crs-row__nom' }, l.nom)),
             h('div', { class: 'crs-row__qty' }, h('div', { class: 'stepper' }, dec, valEl, inc),
-              h('span', { class: 'crs-row__unit' }, `× ${l.unite_de_vente || 'unité'}`)),
-            h('span', { class: 'crs-row__hint' }, `manque ~${num(l.portions_manquantes)} portions`),
+              h('span', { class: 'crs-row__unit' }, l.poids_paquet_g > 0 ? `× ${num(l.poids_paquet_g)} g` : '')),
+            h('span', { class: 'crs-row__hint' }, `manque ~${num(l.grammes_manquants)} g`),
           ),
           excl,
         );

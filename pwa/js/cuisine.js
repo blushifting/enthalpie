@@ -3,28 +3,32 @@
 // compteurs gamifiés (SPEC §4.3, §7). Lecture + une action par recette.
 import { h, clear, num, macroChips, frDate } from './util.js';
 
-function macrosLine(m) {
+// Les macros du catalogue sont POUR 100 g ; sur une carte recette, ce qui parle
+// c'est ce que la fournée entière apporte.
+function macrosLine(m, poids) {
+  const r = (Number(poids) || 0) / 100;
   return h('div', { class: 'recipe-card__macros' },
-    ...macroChips(m).map(([k, v]) => h('span', {}, h('b', {}, v), ' ', k)));
+    ...macroChips({ kcal: Math.round((m.kcal || 0) * r), prot_g: Math.round((m.prot_g || 0) * r) })
+      .map(([k, v]) => h('span', {}, h('b', {}, v), ' ', k)));
 }
 
 function stockChip(rec) {
-  const n = Number(rec.stock_portions) || 0;
+  const n = Number(rec.stock_g) || 0;
   return n > 0
-    ? h('span', { class: 'recipe-card__stock is-stocked' }, `${num(n)} en stock`)
+    ? h('span', { class: 'recipe-card__stock is-stocked' }, `${num(Math.round(n))} g en stock`)
     : h('span', { class: 'recipe-card__stock' }, 'à cuisiner');
 }
 
 /** Carte recette : hero = recette de la semaine, sinon carte de bibliothèque. */
 function recipeCard(rec, handlers, { hero = false } = {}) {
-  const portions = Number(rec.portions_produites) || 0;
+  const poids = Number(rec.poids_produit_g) || 0;
   const isNew = rec.nouveau || rec.jamais_cuisinee;
   const badge = hero
     ? h('span', { class: `recipe-card__badge ${isNew ? 'is-new' : ''}` }, isNew ? '✨ Nouveau' : '♻ Batch classique')
     : (isNew ? h('span', { class: 'recipe-card__badge is-new' }, '✨ Nouveau') : null);
 
   const meta = h('div', { class: 'recipe-card__meta' },
-    `Produit ${num(portions)} portion${portions > 1 ? 's' : ''}`,
+    `Fournée de ${num(Math.round(poids))} g`,
     rec.derniere_realisation ? ` · cuisiné le ${frDate(rec.derniere_realisation)}` : ' · jamais cuisiné');
 
   // Instructions repliables (pas de recette → pas de bouton).
@@ -41,7 +45,7 @@ function recipeCard(rec, handlers, { hero = false } = {}) {
 
   const cta = h('button', { class: 'recipe-card__cta', type: 'button' },
     h('span', {}, 'Je l’ai cuisinée'),
-    portions ? h('span', { class: 'recipe-card__cta-sub' }, `+${num(portions)} portion${portions > 1 ? 's' : ''}`) : null);
+    poids ? h('span', { class: 'recipe-card__cta-sub' }, `+${num(Math.round(poids))} g`) : null);
   // Désactive à la volée pour éviter un double POST ; la vue est reconstruite après.
   cta.addEventListener('click', () => { cta.disabled = true; handlers.onCuisiner(rec); });
 
@@ -49,7 +53,7 @@ function recipeCard(rec, handlers, { hero = false } = {}) {
     h('div', { class: 'recipe-card__top' },
       h('div', { class: 'recipe-card__titles' }, badge, h('h3', { class: 'recipe-card__nom' }, rec.nom)),
       stockChip(rec)),
-    macrosLine(rec.macros),
+    macrosLine(rec.macros, rec.poids_produit_g),
     meta,
     toggle,
     steps,

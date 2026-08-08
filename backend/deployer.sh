@@ -81,11 +81,16 @@ if [ ! -f appsscript.json ] && [ -f "$TMP/appsscript.json" ]; then
   echo "→ appsscript.json récupéré du distant (manifeste requis par clasp)"
 fi
 
-if [ "$DIVERGENCE" = "1" ]; then
+if [ "$DIVERGENCE" = "1" ] && [ "${1:-}" != "--autoriser-suppression" ]; then
   echo
   echo "✗ Arrêt : le distant contient des fichiers absents du dépôt." >&2
-  echo "  Récupère-les d'abord (clasp pull) avant de redéployer." >&2
+  echo "  Soit tu les as perdus (récupère-les : clasp pull)," >&2
+  echo "  soit tu les as supprimés exprès — dans ce cas :" >&2
+  echo "      bash backend/deployer.sh --autoriser-suppression" >&2
   exit 1
+fi
+if [ "$DIVERGENCE" = "1" ]; then
+  echo "→ suppression distante explicitement autorisée"
 fi
 
 # --- Push + nouvelle version du déploiement existant ----------------------

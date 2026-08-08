@@ -13,7 +13,6 @@
  *   GET  ?token=…&action=cuisine        → recette de la semaine + biblio batch + compteurs
  *   GET  ?token=…&action=bilan          → moyennes hebdo prot/kcal vs cibles (4 sem.)
  *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement | exterieur
- *   POST {token, action:'cloture'}      → clôture médiane du jour (aussi appelable par trigger)
  *
  * Conforme à SPEC.md §3 (modèle de données) et §5-6 (moteur / liste).
  * 100 % déterministe, aucune IA ici (SPEC §1 principe 6).
@@ -56,9 +55,8 @@ var SCHEMA = {
   ]
 };
 
-// Valeurs de créneau reconnues (SPEC §3.2). Collation = optionnel, pas de médian.
+// Valeurs de créneau reconnues (SPEC §3.2).
 var CRENEAUX = ['petit_dej', 'dejeuner', 'diner', 'collation'];
-var CRENEAUX_MEDIAN = ['petit_dej', 'dejeuner', 'diner']; // SPEC §3.4 : collation exclue
 
 /* ===================================================================== */
 /* 2. SETUP — création / réinitialisation des onglets                    */
@@ -201,7 +199,6 @@ function handle_(e, p) {
       case 'search_catalog': result = searchCatalog_(p.q); break;
       case 'log':            result = postLog_(p); break;
       case 'add_produit':    result = addProduit_(p); break;
-      case 'cloture':        result = clotureMediane_(p.date); break;
       default: throw new Error('Action inconnue : ' + action);
     }
     return json_({ ok: true, action: action, data: result });
@@ -578,13 +575,10 @@ function potFini_(p, now, tz) {
   setStock_(p.ref, 0);
   appendRow_('log', { timestamp: now, type: 'pot_fini', ref: p.ref, quantite: 1, source: p.source || 'scan' });
 
-  // Écart = stock qu'on croyait encore avoir (avant). S'il est positif, on a
-  // sur-estimé le stock → on a donc sous-compté la conso réelle : on impute
-  // cet écart aux lignes médian récentes contenant ce produit.
-  var repartis = 0;
-  if (avant > 0) repartis = repartirEcartSurMedian_(p.ref, avant, tz);
-
-  return { calibrated: p.ref, stock_avant: round1_(avant), ecart_reparti: round1_(repartis) };
+  // Le stock est simplement recalé à 0. L'écart n'est plus réparti sur des
+  // repas supposés : la clôture médiane a été retirée (2026-08-08), elle
+  // inventait une consommation ET puisait dans le stock.
+  return { calibrated: p.ref, stock_avant: round1_(avant) };
 }
 
 /** Batch cuisiné → ajoute au stock le poids de la fournée (somme des ingrédients). */
@@ -750,110 +744,6 @@ function parseExtra_(extra) {
 /* 8. CLÔTURE MÉDIANE QUOTIDIENNE (SPEC §3.4)                             */
 /* ===================================================================== */
 
-/**
- * Pour la date donnée (défaut : hier), tout créneau de CRENEAUX_MEDIAN sans
- * log « plat » reçoit une ligne médian = plat médian (en kcal) du pool.
- * À câbler sur un déclencheur temporel quotidien (voir installTriggers()).
- */
-function clotureMediane_(dateStr) {
-  var tz = params_().tz || 'Europe/Paris';
-  var d = dateStr ? new Date(dateStr) : new Date(Date.now() - 86400000);
-  var day = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
-
-  // Journée activement suivie au produit (log fractionné) → aucun médian, sinon
-  // on double-compterait les apports déjà saisis au curseur.
-  var hasProduit = readTable_('log').some(function (l) {
-    return l.type === 'produit' && formatTs_(l.timestamp, tz) === day;
-  });
-  if (hasProduit) return { date: day, medians_ajoutes: [], note: 'jour suivi au produit — médian ignoré' };
-
-  // Créneaux déjà loggés ce jour-là
-  var loggedCreneaux = {};
-  var platsById = indexBy_(readTable_('plats'), 'id');
-  readTable_('log').forEach(function (l) {
-    if (l.type !== 'plat') return;
-    if (formatTs_(l.timestamp, tz) !== day) return;
-    var pl = platsById[l.ref];
-    if (!pl) return;
-    String(pl.creneau).split(/[;,]/).map(trim_).forEach(function (c) { loggedCreneaux[c] = true; });
-  });
-
-  var ajouts = [];
-  CRENEAUX_MEDIAN.forEach(function (c) {
-    if (loggedCreneaux[c]) return;
-    var medianId = platMedianKcal_(c, platsById);
-    if (!medianId) return;
-    var ts = new Date(day + 'T20:00:00'); // ancré en soirée du jour clôturé
-    var pl = platsById[medianId];
-    // Poids d'un repas médian : pour un assemblage, la composition EST une
-    // assiette. Pour un plat batch, aucun poids de portion n'existe depuis le
-    // passage au gramme (2026-08-08) → on ne peut pas l'inventer, on saute.
-    if (String(pl.type) === 'batch') return;
-    var poids = poidsFournee_(pl);
-    if (!(poids > 0)) return;
-    appendRow_('log', { timestamp: ts, type: 'plat', ref: medianId, quantite: poids, source: 'median' });
-    composition_(pl).forEach(function (x) { adjustStock_(x.produit_id, -x.grammes); });
-    ajouts.push({ creneau: c, plat_median: medianId, grammes: Math.round(poids) });
-  });
-  return { date: day, medians_ajoutes: ajouts };
-}
-
-/**
- * Plat médian d'un pool de créneau, parmi les plats actifs. Classé sur les kcal
- * d'une ASSIETTE, pas sur la densité : depuis le passage au gramme, la colonne
- * kcal_100g est une densité, et trier dessus reviendrait à comparer un gratin
- * à une salade au poids égal. On multiplie donc par le poids de la composition.
- * Les plats batch sont exclus : sans portion, une assiette n'a plus de poids
- * défini (cf. clotureMediane_).
- */
-function platMedianKcal_(creneau, platsById) {
-  var candidats = Object.keys(platsById).map(function (k) { return platsById[k]; })
-    .filter(function (pl) {
-      if (!actif_(pl)) return false;
-      if (String(pl.type) === 'batch') return false;
-      if (!(poidsFournee_(pl) > 0)) return false;
-      return String(pl.creneau).split(/[;,]/).map(trim_).indexOf(creneau) !== -1;
-    })
-    .sort(function (a, b) {
-      var ka = (Number(a.kcal_100g) || 0) * poidsFournee_(a) / 100;
-      var kb = (Number(b.kcal_100g) || 0) * poidsFournee_(b) / 100;
-      return ka - kb;
-    });
-  if (!candidats.length) return null;
-  return candidats[Math.floor((candidats.length - 1) / 2)].id;
-}
-
-/** Répartit un écart de stock (en grammes) sur les lignes médian récentes du produit. */
-function repartirEcartSurMedian_(produitId, ecart, tz) {
-  var platsById = indexBy_(readTable_('plats'), 'id');
-  // Lignes médian récentes (30 j) dont le plat contient ce produit
-  var sh = sheet_('log');
-  var values = sh.getDataRange().getValues();
-  var headers = values[0];
-  var iType = headers.indexOf('type'), iRef = headers.indexOf('ref'),
-      iQte = headers.indexOf('quantite'), iSrc = headers.indexOf('source'),
-      iTs = headers.indexOf('timestamp');
-  var cutoff = Date.now() - 30 * 86400000;
-  var cibles = [];
-  for (var r = 1; r < values.length; r++) {
-    var row = values[r];
-    if (row[iSrc] !== 'median') continue;
-    var pl = platsById[row[iRef]];
-    if (!pl) continue;
-    var contient = composition_(pl).some(function (c) { return c.produit_id === produitId; });
-    if (!contient) continue;
-    var ts = row[iTs] instanceof Date ? row[iTs].getTime() : new Date(row[iTs]).getTime();
-    if (ts < cutoff) continue;
-    cibles.push(r + 1); // n° de ligne Sheet (1-based, +1 pour l'en-tête)
-  }
-  if (!cibles.length) return 0;
-  var part = ecart / cibles.length;
-  cibles.forEach(function (rowNum) {
-    var cur = Number(sh.getRange(rowNum, iQte + 1).getValue()) || 1;
-    sh.getRange(rowNum, iQte + 1).setValue(round2_(cur + part));
-  });
-  return ecart;
-}
 
 /* ===================================================================== */
 /* 9. STOCK — utilitaires                                                 */
@@ -1065,14 +955,27 @@ function round2_(x) { return Math.round(Number(x) * 100) / 100; }
 /* ===================================================================== */
 
 /** À exécuter une fois pour installer le trigger quotidien (03h). */
-function installTriggers() {
+/**
+ * La clôture médiane a été retirée (2026-08-08) : sur une journée non saisie,
+ * elle inscrivait d'office un repas « médian » ET décrémentait le stock de ses
+ * ingrédients — une consommation fictive doublée d'un stock faux. Le rattrapage
+ * des jours en retard devra se faire par l'utilisateur.
+ *
+ * À lancer UNE FOIS depuis l'éditeur pour supprimer le déclencheur nocturne
+ * s'il avait été installé. clotureMedianeAuto_ reste une fonction vide le temps
+ * que ce soit fait : un déclencheur pointant vers une fonction disparue échoue
+ * chaque nuit et envoie un mail d'erreur.
+ */
+function desinstallerTriggers() {
+  var n = 0;
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'clotureMedianeAuto_') ScriptApp.deleteTrigger(t);
+    if (t.getHandlerFunction() === 'clotureMedianeAuto_') { ScriptApp.deleteTrigger(t); n++; }
   });
-  ScriptApp.newTrigger('clotureMedianeAuto_').timeBased().atHour(3).everyDays(1).create();
+  Logger.log(n + ' déclencheur(s) supprimé(s).');
+  return { supprimes: n };
 }
 
-function clotureMedianeAuto_() { clotureMediane_(); }
+function clotureMedianeAuto_() { /* retiré — voir desinstallerTriggers() */ }
 
 /* ===================================================================== */
 /* 12. MIGRATION « PORTIONS → GRAMMES » (2026-08-08)                      */

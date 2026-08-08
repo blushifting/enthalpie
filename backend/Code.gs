@@ -31,7 +31,7 @@
 // poids. Migration des données existantes : migrerEnGrammes().
 var SCHEMA = {
   produits: [
-    'id', 'nom', 'marque_magasin', 'ean', 'unite_de_vente', 'poids_paquet_g',
+    'id', 'nom', 'marque_magasin', 'ean', 'poids_paquet_g',
     'kcal_100g', 'prot_100g', 'fer_100g_mg', 'flag_gluten', 'flag_lactose', 'perissable_jours', 'actif'
   ],
   plats: [
@@ -334,7 +334,7 @@ function getCourses_() {
     var unites = paquet > 0 ? Math.ceil(manque / paquet) : 1;
     lignes.push({
       produit_id: pr.id, nom: pr.nom, magasin: magasinOf_(pr.marque_magasin),
-      unites: unites, unite_de_vente: pr.unite_de_vente,
+      unites: unites,
       poids_paquet_g: paquet,
       grammes_manquants: Math.round(manque)
     });
@@ -635,7 +635,7 @@ function coursesValidees_(p, now) {
  * dans la PWA). Idempotent sur l'EAN : rescanner un EAN déjà connu renvoie le
  * produit existant sans créer de doublon. Génère l'id (P + n° suivant).
  * Corps attendu : { action:'add_produit', produit:{ nom, ean, kcal, prot_g,
- *   fer_100g_mg, unite_de_vente, poids_paquet_g, flag_gluten, flag_lactose,
+ *   fer_100g_mg, poids_paquet_g, flag_gluten, flag_lactose,
  *   marque_magasin?, perissable_jours?, stock_initial? } }
  * Valeurs nutritionnelles POUR 100 g ; stock_initial et poids_paquet_g en grammes.
  */
@@ -660,7 +660,6 @@ function addProduit_(p) {
     id: id, nom: nom,
     marque_magasin: trim_(f.marque_magasin || f.marque || ''),
     ean: ean,
-    unite_de_vente: trim_(f.unite_de_vente || ''),
     poids_paquet_g: Number(f.poids_paquet_g) || 0,
     kcal_100g: Number(f.kcal_100g) || 0,
     prot_100g: Number(f.prot_100g) || 0,
@@ -706,7 +705,7 @@ function publicProduit_(pr) {
     kcal_100g: Number(pr.kcal_100g) || 0,
     prot_100g: Number(pr.prot_100g) || 0,
     fer_100g_mg: Number(pr.fer_100g_mg) || 0,
-    unite_de_vente: pr.unite_de_vente, poids_paquet_g: Number(pr.poids_paquet_g) || 0,
+    poids_paquet_g: Number(pr.poids_paquet_g) || 0,
     ean: String(pr.ean || ''), actif: pr.actif
   };
 }
@@ -1132,7 +1131,7 @@ function migrerEnGrammes() {
       migre: false,
       motif: 'Poids d\'une portion indéductible pour ' + bloquants.length + ' produit(s).',
       a_completer: bloquants,
-      remede: 'Écris une contenance dans unite_de_vente (ex. « bocal 400 g »), puis relance.'
+      remede: 'Écris le poids sur la ligne du produit (colonne unite_de_vente, ex. « 400 g »), puis relance. La colonne sera supprimée ensuite.'
     };
   }
 
@@ -1193,6 +1192,11 @@ function migrerEnGrammes() {
     var pl3 = platsById[row.plat_id];
     return pl3 ? round2_(poidsCompositionAncienne_(pl3, portionG) * (Number(val) || 1)) : '';
   });
+
+  // 7. `unite_de_vente` a livré son poids : la colonne n'a plus d'usage. On la
+  // supprime physiquement, sinon les en-têtes réécrits par setup() seraient
+  // décalés d'une colonne par rapport aux données.
+  supprimerColonne_('produits', 'unite_de_vente');
 
   Logger.log('Migration terminée. Sauvegarde : ' + copie.getUrl());
   return {
@@ -1276,6 +1280,13 @@ function convertirNutrimentsPlats_(portionG, platsById) {
     });
   }
   idx.forEach(function (i, k) { if (i !== -1) sh.getRange(1, i + 1).setValue(noms[k]); });
+}
+
+/** Supprime une colonne par son en-tête (no-op si absente). */
+function supprimerColonne_(onglet, nom) {
+  var sh = sheet_(onglet);
+  var i = sh.getDataRange().getValues()[0].indexOf(nom);
+  if (i !== -1) sh.deleteColumn(i + 1);
 }
 
 /** Renomme une colonne et recalcule ses valeurs via `calcul(ancienne, ligne)`. */

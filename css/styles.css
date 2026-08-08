@@ -644,6 +644,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .scan-preview__line { font-size: 13px; color: var(--txt-muted); line-height: 1.6; }
 .scan-preview__line b { color: var(--txt); font-weight: 650; }
 .scan-preview__line--faint { color: var(--txt-dim); font-size: 12px; margin-top: 4px; }
+.scan-preview__line--warn { color: var(--warn); }
 
 .scan-qty { padding-left: 0; margin-bottom: 6px; }
 .scan-nocode { margin-top: 12px; font-size: 13px; }

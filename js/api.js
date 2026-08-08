@@ -114,7 +114,11 @@ async function demoData(action, params = {}) {
 // API publique, CORS ouvert : appel direct navigateur (le service worker
 // laisse passer sans cacher, cf. sw.js). Renvoie une fiche normalisée ou null.
 const OFF_BASE = 'https://world.openfoodfacts.org/api/v2/product/';
-const OFF_FIELDS = 'product_name,brands,quantity,nutriments,allergens_tags';
+// `quantity` est du texte libre (« 6 pcs », « 360 g (6 x 60 g) », souvent vide) ;
+// `product_quantity` est le poids net en grammes, numérique — c'est lui qui permet
+// de calculer une portion. Les deux sont demandés : ni l'un ni l'autre n'est fiable
+// seul (cf. boîtes d'œufs, qui ne donnent qu'un compte).
+const OFF_FIELDS = 'product_name,brands,quantity,product_quantity,nutriments,allergens_tags';
 
 export async function fetchOFF(ean) {
   const code = String(ean || '').replace(/\D/g, '');
@@ -149,6 +153,7 @@ function normalizeOFF(ean, p) {
     nom: String(p.product_name || '').trim(),
     marque: String(p.brands || '').split(',')[0].trim(),
     quantite: String(p.quantity || '').trim(),
+    poids_net_g: Number(p.product_quantity) > 0 ? Math.round(Number(p.product_quantity)) : 0,
     kcal_100g: Math.round(offNum(n, ['energy-kcal_100g', 'energy-kcal_serving'])),
     prot_100g: Math.round(offNum(n, ['proteins_100g', 'proteins_serving']) * 10) / 10,
     fer_100g_mg: Math.round(offNum(n, ['iron_100g']) * 1000 * 100) / 100, // OFF : fer en g/100 g

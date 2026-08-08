@@ -1282,6 +1282,53 @@ function convertirNutrimentsPlats_(portionG, platsById) {
   idx.forEach(function (i, k) { if (i !== -1) sh.getRange(1, i + 1).setValue(noms[k]); });
 }
 
+/**
+ * Alternative à migrerEnGrammes() : on repart de zéro et on rescanne tout.
+ *
+ * Vide produits, plats, recettes, stock et log ; PRÉSERVE objectifs et
+ * parametres — le token de l'app y vit, l'effacer déconnecterait le téléphone.
+ * Duplique le classeur avant toute chose.
+ *
+ * Ce qui est perdu et ne revient pas par le scan : les plats, les recettes et
+ * leurs compositions (écrits à la main), et l'historique du bilan (4 semaines).
+ *
+ * Garde-fou : exige la confirmation littérale, pour qu'un lancement distrait
+ * depuis l'éditeur ne puisse rien détruire.
+ *   reinitialiserDonnees('EFFACER')
+ */
+function reinitialiserDonnees(confirmation) {
+  if (confirmation !== 'EFFACER') {
+    return {
+      efface: false,
+      mode_emploi: 'Relancer avec reinitialiserDonnees(\'EFFACER\') pour confirmer.',
+      seront_vides: ['produits', 'plats', 'recettes', 'stock', 'log'],
+      seront_gardes: ['objectifs', 'parametres (dont le token)'],
+      perdu_definitivement: 'Plats, recettes et compositions (non rescannables) + historique du bilan.'
+    };
+  }
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var copie = ss.copy('Enthalpie — sauvegarde avant remise à zéro ' +
+    Utilities.formatDate(new Date(), params_().tz || 'Europe/Paris', 'yyyy-MM-dd HH:mm'));
+
+  var vides = [];
+  ['produits', 'plats', 'recettes', 'stock', 'log'].forEach(function (nom) {
+    var sh = ss.getSheetByName(nom);
+    if (!sh) return;
+    var n = sh.getLastRow() - 1;          // hors ligne d'en-tête
+    if (n > 0) sh.deleteRows(2, n);
+    vides.push(nom + ' (' + Math.max(0, n) + ' ligne(s))');
+  });
+
+  Logger.log('Remise à zéro faite. Sauvegarde : ' + copie.getUrl());
+  return {
+    efface: true,
+    vides: vides,
+    sauvegarde: copie.getUrl(),
+    suite: 'Lancer setup() (écrit les nouveaux en-têtes), puis rescanner les produits.'
+  };
+}
+
 /** Supprime une colonne par son en-tête (no-op si absente). */
 function supprimerColonne_(onglet, nom) {
   var sh = sheet_(onglet);

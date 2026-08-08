@@ -23,23 +23,29 @@
 /* 1. SCHÉMA DES ONGLETS                                                  */
 /* ===================================================================== */
 
+// Unité interne UNIQUE : le gramme. Le stock, les quantités des logs et les
+// compositions sont tous en grammes ; les valeurs nutritionnelles sont toutes
+// POUR 100 g. La notion de « portion » a été retirée (2026-08-08) : elle voulait
+// dire « une tranche » côté usage et « 100 g » côté jargon, d'où des calculs
+// faux. L'app raisonne désormais en pourcentage d'un paquet dont on connaît le
+// poids. Migration des données existantes : migrerEnGrammes().
 var SCHEMA = {
   produits: [
-    'id', 'nom', 'marque_magasin', 'ean', 'unite_de_vente', 'portions_par_unite',
-    'kcal', 'prot_g', 'fer_mg', 'flag_gluten', 'flag_lactose', 'perissable_jours', 'actif'
+    'id', 'nom', 'marque_magasin', 'ean', 'unite_de_vente', 'poids_paquet_g',
+    'kcal_100g', 'prot_100g', 'fer_100g_mg', 'flag_gluten', 'flag_lactose', 'perissable_jours', 'actif'
   ],
   plats: [
-    'id', 'nom', 'creneau', 'composition', 'kcal', 'prot_g', 'fer_mg',
+    'id', 'nom', 'creneau', 'composition', 'kcal_100g', 'prot_100g', 'fer_100g_mg',
     'type', 'gabarit', 'actif'
   ],
   recettes: [
-    'id', 'plat_id', 'portions_produites', 'instructions', 'derniere_realisation'
+    'id', 'plat_id', 'poids_produit_g', 'instructions', 'derniere_realisation'
   ],
   log: [
     'timestamp', 'type', 'ref', 'quantite', 'source', 'extra'
   ],
   stock: [
-    'ref', 'portions'
+    'ref', 'grammes'
   ],
   objectifs: [
     'kcal_jour', 'prot_g_jour', 'fer_mg_jour', 'tol_kcal', 'tol_prot',
@@ -234,13 +240,15 @@ function getState_() {
   var conso = { kcal: 0, prot_g: 0, fer_mg: 0 };
   readTable_('log').forEach(function (l) {
     if (formatTs_(l.timestamp, tz) !== today) return;
-    var m = null;
-    if (l.type === 'plat') m = macrosOf_(l.ref, platsById);
-    else if (l.type === 'produit') m = macrosProduit_(l.ref, produitsById);
-    else if (l.type === 'exterieur') m = parseExtra_(l.extra);
+    // Les macros de plats/produits sont POUR 100 g et la quantité loguée est en
+    // grammes → facteur q/100. Le repas extérieur, lui, porte des macros
+    // absolues saisies à la main : pas de mise à l'échelle.
+    var m = null; var f = 0;
+    if (l.type === 'plat') { m = macrosOf_(l.ref, platsById); f = (Number(l.quantite) || 0) / 100; }
+    else if (l.type === 'produit') { m = macrosProduit_(l.ref, produitsById); f = (Number(l.quantite) || 0) / 100; }
+    else if (l.type === 'exterieur') { m = parseExtra_(l.extra); f = 1; }
     else return;
-    var q = Number(l.quantite) || 1;
-    conso.kcal += m.kcal * q; conso.prot_g += m.prot_g * q; conso.fer_mg += m.fer_mg * q;
+    conso.kcal += m.kcal * f; conso.prot_g += m.prot_g * f; conso.fer_mg += m.fer_mg * f;
   });
 
   var obj = objectifs_();
@@ -311,21 +319,24 @@ function getCourses_() {
   var platsById = indexBy_(readTable_('plats'), 'id');
   var stock = stockMap_();
 
-  // Rythme : portions consommées par produit sur 14 j → par jour
+  // Rythme : grammes consommés par produit sur 14 j → par jour
   var perDay = consoParProduitParJour_(platsById, produitsById, 14);
 
   var lignes = [];
   produits.forEach(function (pr) {
-    var portionsBesoin = (perDay[pr.id] || 0) * horizon;
+    var besoinG = (perDay[pr.id] || 0) * horizon;
     var enStock = Number(stock[pr.id] || 0);
-    var manque = portionsBesoin - enStock;
+    var manque = besoinG - enStock;
     if (manque <= 0) return;
-    var parUnite = Number(pr.portions_par_unite) || 1;
-    var unites = Math.ceil(manque / parUnite); // arrondi à l'unité de vente sup.
+    var paquet = Number(pr.poids_paquet_g) || 0;
+    // Sans poids de paquet connu, on ne peut pas convertir en nombre d'articles
+    // à acheter : on affiche 1 et le manque en grammes reste l'information sûre.
+    var unites = paquet > 0 ? Math.ceil(manque / paquet) : 1;
     lignes.push({
       produit_id: pr.id, nom: pr.nom, magasin: magasinOf_(pr.marque_magasin),
       unites: unites, unite_de_vente: pr.unite_de_vente,
-      portions_manquantes: round1_(manque)
+      poids_paquet_g: paquet,
+      grammes_manquants: Math.round(manque)
     });
   });
 
@@ -349,7 +360,7 @@ function getCourses_() {
 /**
  * Écran Cuisine : recette de la semaine (badge nouveau / batch classique) +
  * bibliothèque des recettes batch (« je l'ai cuisinée » = POST batch_cuisine,
- * qui transforme ingrédients → portions du plat batch dans le stock).
+ * qui transforme les ingrédients en poids de fournée dans le stock).
  */
 function getCuisine_() {
   var tz = params_().tz || 'Europe/Paris';
@@ -365,9 +376,10 @@ function getCuisine_() {
       nom: pl.nom || String(rec.plat_id),
       type: pl.type || 'batch',
       macros: macrosOf_(rec.plat_id, platsById),
-      portions_produites: Number(rec.portions_produites) || 0,
+      // Poids de la fournée : colonne si renseignée, sinon somme des ingrédients.
+      poids_produit_g: Math.round(Number(rec.poids_produit_g) || poidsFournee_(pl)),
       instructions: String(rec.instructions || ''),
-      stock_portions: round1_(Number(stock[rec.plat_id] || 0)),
+      stock_g: Math.round(Number(stock[rec.plat_id] || 0)),
       derniere_realisation: jamais ? '' : formatTs_(rec.derniere_realisation, tz),
       jamais_cuisinee: jamais
     };
@@ -388,8 +400,8 @@ function getCuisine_() {
   }
   var recetteSemaine = vedette ? {
     recette_id: vedette.recette_id, plat_id: vedette.plat_id, nom: vedette.nom,
-    macros: vedette.macros, portions_produites: vedette.portions_produites,
-    instructions: vedette.instructions, stock_portions: vedette.stock_portions,
+    macros: vedette.macros, poids_produit_g: vedette.poids_produit_g,
+    instructions: vedette.instructions, stock_g: vedette.stock_g,
     nouveau: vedette.jamais_cuisinee, derniere_realisation: vedette.derniere_realisation
   } : null;
 
@@ -410,15 +422,16 @@ function intakeParJour_(tz) {
   var produitsById = indexBy_(readTable_('produits'), 'id');
   var parJour = {};
   readTable_('log').forEach(function (l) {
-    var m = null;
-    if (l.type === 'plat') m = macrosOf_(l.ref, platsById);
-    else if (l.type === 'produit') m = macrosProduit_(l.ref, produitsById);
-    else if (l.type === 'exterieur') m = parseExtra_(l.extra);
+    // Même mise à l'échelle que getState_ : macros pour 100 g × grammes/100,
+    // sauf le repas extérieur dont les macros sont absolues.
+    var m = null; var f = 0;
+    if (l.type === 'plat') { m = macrosOf_(l.ref, platsById); f = (Number(l.quantite) || 0) / 100; }
+    else if (l.type === 'produit') { m = macrosProduit_(l.ref, produitsById); f = (Number(l.quantite) || 0) / 100; }
+    else if (l.type === 'exterieur') { m = parseExtra_(l.extra); f = 1; }
     else return;
-    var q = Number(l.quantite) || 1;
     var day = formatTs_(l.timestamp, tz);
     var b = parJour[day] || (parJour[day] = { kcal: 0, prot_g: 0, fer_mg: 0 });
-    b.kcal += m.kcal * q; b.prot_g += m.prot_g * q; b.fer_mg += m.fer_mg * q;
+    b.kcal += m.kcal * f; b.prot_g += m.prot_g * f; b.fer_mg += m.fer_mg * f;
   });
   return parJour;
 }
@@ -521,8 +534,11 @@ function logPlat_(p, now) {
   if (String(pl.type) === 'batch') {
     adjustStock_(pl.id, -q);
   } else {
+    // Assemblage : q est le poids mangé (g) rapporté au poids de la fournée.
+    var poids = poidsFournee_(pl);
+    var part = poids > 0 ? q / poids : 0;
     composition_(pl).forEach(function (c) {
-      adjustStock_(c.produit_id, -c.nb_portions * q);
+      adjustStock_(c.produit_id, -c.grammes * part);
     });
   }
   return { logged: 'plat', ref: p.ref, quantite: q };
@@ -540,7 +556,7 @@ function logProduit_(p, now) {
   var pr = produitsById[p.ref];
   if (!pr) throw new Error('Produit inconnu : ' + p.ref);
   var q = Number(p.quantite);
-  if (!(q > 0)) throw new Error('quantite (portions) > 0 requise.');
+  if (!(q > 0)) throw new Error('quantite (grammes) > 0 requise.');
 
   appendRow_('log', {
     timestamp: now, type: 'produit', ref: p.ref, quantite: q,
@@ -570,41 +586,45 @@ function potFini_(p, now, tz) {
   return { calibrated: p.ref, stock_avant: round1_(avant), ecart_reparti: round1_(repartis) };
 }
 
-/** Batch cuisiné → crée portions_produites unités de stock du plat batch. */
+/** Batch cuisiné → ajoute au stock le poids de la fournée (somme des ingrédients). */
 function batchCuisine_(p, now) {
   if (!p.ref) throw new Error('ref (recette_id ou plat_id) requis.');
   var recettes = indexBy_(readTable_('recettes'), 'id');
   var rec = recettes[p.ref];
-  var platId, portions;
-  if (rec) { platId = rec.plat_id; portions = Number(rec.portions_produites) || 0; }
-  else { platId = p.ref; portions = Number(p.portions) || 0; }
-  if (!portions) throw new Error('portions_produites introuvable/nul.');
-
-  // Cuisiner = transformer : − ingrédients (composition × portions produites),
-  // + portions du plat batch dans le stock (ensuite loguables comme un aliment).
+  var platId = rec ? rec.plat_id : p.ref;
   var pl = indexBy_(readTable_('plats'), 'id')[platId];
-  if (pl) composition_(pl).forEach(function (c) { adjustStock_(c.produit_id, -c.nb_portions * portions); });
-  adjustStock_(platId, portions);
-  appendRow_('log', { timestamp: now, type: 'batch_cuisine', ref: platId, quantite: portions, source: p.source || 'tap' });
+  if (!pl) throw new Error('Plat inconnu : ' + platId);
+
+  // Un plat cuisiné n'a pas d'emballage : le poids de la fournée EST la somme
+  // des ingrédients consommés (décision Azur, 2026-08-08). La colonne
+  // poids_produit_g permet de corriger à la main (évaporation, ajout d'eau…).
+  var poids = Number(p.poids_g) || (rec ? Number(rec.poids_produit_g) : 0) || poidsFournee_(pl);
+  if (!(poids > 0)) throw new Error('Poids de la fournée inconnu : composition vide ?');
+
+  // Cuisiner = transformer : − les ingrédients, + la fournée dans le stock.
+  composition_(pl).forEach(function (c) { adjustStock_(c.produit_id, -c.grammes); });
+  adjustStock_(platId, poids);
+  appendRow_('log', { timestamp: now, type: 'batch_cuisine', ref: platId, quantite: poids, source: p.source || 'tap' });
   // Met à jour derniere_realisation pour la rotation des suggestions hebdo
   if (rec) touchRecette_(p.ref, now);
-  return { batch: platId, portions_ajoutees: portions };
+  return { batch: platId, grammes_ajoutes: Math.round(poids) };
 }
 
 /** Courses validées → incrémente le stock des articles cochés. */
 function coursesValidees_(p, now) {
-  var items = p.items || []; // [{produit_id, unites}] ou [{produit_id, portions}]
+  var items = p.items || []; // [{produit_id, unites}] ou [{produit_id, grammes}]
   if (!items.length) throw new Error('items requis (liste des articles cochés).');
   var produitsById = indexBy_(readTable_('produits'), 'id');
   var ajouts = [];
   items.forEach(function (it) {
     var pr = produitsById[it.produit_id];
     if (!pr) return;
-    var portions = it.portions != null
-      ? Number(it.portions)
-      : Number(it.unites || 1) * (Number(pr.portions_par_unite) || 1);
-    adjustStock_(it.produit_id, portions);
-    ajouts.push({ produit_id: it.produit_id, portions: portions });
+    var grammes = it.grammes != null
+      ? Number(it.grammes)
+      : Number(it.unites || 1) * (Number(pr.poids_paquet_g) || 0);
+    if (!(grammes > 0)) return;   // poids de paquet inconnu → rien à ajouter
+    adjustStock_(it.produit_id, grammes);
+    ajouts.push({ produit_id: it.produit_id, grammes: grammes });
   });
   appendRow_('log', { timestamp: now, type: 'courses', ref: '', quantite: ajouts.length, source: p.source || 'tap' });
   return { courses_validees: ajouts };
@@ -615,8 +635,9 @@ function coursesValidees_(p, now) {
  * dans la PWA). Idempotent sur l'EAN : rescanner un EAN déjà connu renvoie le
  * produit existant sans créer de doublon. Génère l'id (P + n° suivant).
  * Corps attendu : { action:'add_produit', produit:{ nom, ean, kcal, prot_g,
- *   fer_mg, unite_de_vente, portions_par_unite, flag_gluten, flag_lactose,
+ *   fer_100g_mg, unite_de_vente, poids_paquet_g, flag_gluten, flag_lactose,
  *   marque_magasin?, perissable_jours?, stock_initial? } }
+ * Valeurs nutritionnelles POUR 100 g ; stock_initial et poids_paquet_g en grammes.
  */
 function addProduit_(p) {
   var f = p.produit || p; // accepte {produit:{…}} ou champs à plat
@@ -640,17 +661,17 @@ function addProduit_(p) {
     marque_magasin: trim_(f.marque_magasin || f.marque || ''),
     ean: ean,
     unite_de_vente: trim_(f.unite_de_vente || ''),
-    portions_par_unite: Number(f.portions_par_unite) || 1,
-    kcal: Number(f.kcal) || 0,
-    prot_g: Number(f.prot_g) || 0,
-    fer_mg: Number(f.fer_mg) || 0,
+    poids_paquet_g: Number(f.poids_paquet_g) || 0,
+    kcal_100g: Number(f.kcal_100g) || 0,
+    prot_100g: Number(f.prot_100g) || 0,
+    fer_100g_mg: Number(f.fer_100g_mg) || 0,
     flag_gluten: normFlag_(f.flag_gluten),
     flag_lactose: normFlag_(f.flag_lactose),
     perissable_jours: (f.perissable_jours === '' || f.perissable_jours == null) ? '' : Number(f.perissable_jours),
     actif: 'oui'
   });
 
-  // Stock initial optionnel (portions) ; 0 par défaut : on scanne souvent un
+  // Stock initial optionnel (grammes) ; 0 par défaut : on scanne souvent un
   // contenant déjà entamé/fini, le réappro passe par « courses ».
   var stock0 = Number(f.stock_initial);
   if (stock0 > 0) setStock_(id, stock0);
@@ -682,8 +703,10 @@ function normFlag_(v) {
 function publicProduit_(pr) {
   return {
     id: pr.id, nom: pr.nom,
-    kcal: Number(pr.kcal) || 0, prot_g: Number(pr.prot_g) || 0, fer_mg: Number(pr.fer_mg) || 0,
-    unite_de_vente: pr.unite_de_vente, portions_par_unite: Number(pr.portions_par_unite) || 1,
+    kcal_100g: Number(pr.kcal_100g) || 0,
+    prot_100g: Number(pr.prot_100g) || 0,
+    fer_100g_mg: Number(pr.fer_100g_mg) || 0,
+    unite_de_vente: pr.unite_de_vente, poids_paquet_g: Number(pr.poids_paquet_g) || 0,
     ean: String(pr.ean || ''), actif: pr.actif
   };
 }
@@ -760,29 +783,46 @@ function clotureMediane_(dateStr) {
     var medianId = platMedianKcal_(c, platsById);
     if (!medianId) return;
     var ts = new Date(day + 'T20:00:00'); // ancré en soirée du jour clôturé
-    appendRow_('log', { timestamp: ts, type: 'plat', ref: medianId, quantite: 1, source: 'median' });
-    // Décrément stock côté ingrédients aussi (cohérence du stock)
     var pl = platsById[medianId];
-    if (String(pl.type) === 'batch') adjustStock_(medianId, -1);
-    else composition_(pl).forEach(function (x) { adjustStock_(x.produit_id, -x.nb_portions); });
-    ajouts.push({ creneau: c, plat_median: medianId });
+    // Poids d'un repas médian : pour un assemblage, la composition EST une
+    // assiette. Pour un plat batch, aucun poids de portion n'existe depuis le
+    // passage au gramme (2026-08-08) → on ne peut pas l'inventer, on saute.
+    if (String(pl.type) === 'batch') return;
+    var poids = poidsFournee_(pl);
+    if (!(poids > 0)) return;
+    appendRow_('log', { timestamp: ts, type: 'plat', ref: medianId, quantite: poids, source: 'median' });
+    composition_(pl).forEach(function (x) { adjustStock_(x.produit_id, -x.grammes); });
+    ajouts.push({ creneau: c, plat_median: medianId, grammes: Math.round(poids) });
   });
   return { date: day, medians_ajoutes: ajouts };
 }
 
-/** Plat médian (par kcal) d'un pool de créneau, parmi les plats actifs. */
+/**
+ * Plat médian d'un pool de créneau, parmi les plats actifs. Classé sur les kcal
+ * d'une ASSIETTE, pas sur la densité : depuis le passage au gramme, la colonne
+ * kcal_100g est une densité, et trier dessus reviendrait à comparer un gratin
+ * à une salade au poids égal. On multiplie donc par le poids de la composition.
+ * Les plats batch sont exclus : sans portion, une assiette n'a plus de poids
+ * défini (cf. clotureMediane_).
+ */
 function platMedianKcal_(creneau, platsById) {
   var candidats = Object.keys(platsById).map(function (k) { return platsById[k]; })
     .filter(function (pl) {
       if (!actif_(pl)) return false;
+      if (String(pl.type) === 'batch') return false;
+      if (!(poidsFournee_(pl) > 0)) return false;
       return String(pl.creneau).split(/[;,]/).map(trim_).indexOf(creneau) !== -1;
     })
-    .sort(function (a, b) { return (Number(a.kcal) || 0) - (Number(b.kcal) || 0); });
+    .sort(function (a, b) {
+      var ka = (Number(a.kcal_100g) || 0) * poidsFournee_(a) / 100;
+      var kb = (Number(b.kcal_100g) || 0) * poidsFournee_(b) / 100;
+      return ka - kb;
+    });
   if (!candidats.length) return null;
   return candidats[Math.floor((candidats.length - 1) / 2)].id;
 }
 
-/** Répartit un écart de portions sur les lignes médian récentes du produit. */
+/** Répartit un écart de stock (en grammes) sur les lignes médian récentes du produit. */
 function repartirEcartSurMedian_(produitId, ecart, tz) {
   var platsById = indexBy_(readTable_('plats'), 'id');
   // Lignes médian récentes (30 j) dont le plat contient ce produit
@@ -820,20 +860,20 @@ function repartirEcartSurMedian_(produitId, ecart, tz) {
 
 function stockMap_() {
   var out = {};
-  readTable_('stock').forEach(function (r) { out[String(r.ref)] = Number(r.portions) || 0; });
+  readTable_('stock').forEach(function (r) { out[String(r.ref)] = Number(r.grammes) || 0; });
   return out;
 }
 
-function setStock_(ref, portions) {
+function setStock_(ref, grammes) {
   var sh = sheet_('stock');
   var values = sh.getDataRange().getValues();
   for (var r = 1; r < values.length; r++) {
     if (String(values[r][0]) === String(ref)) {
-      sh.getRange(r + 1, 2).setValue(round2_(portions));
+      sh.getRange(r + 1, 2).setValue(round2_(grammes));
       return;
     }
   }
-  sh.appendRow([ref, round2_(portions)]);
+  sh.appendRow([ref, round2_(grammes)]);
 }
 
 function adjustStock_(ref, delta) {
@@ -858,7 +898,7 @@ function actif_(row) {
 
 function trim_(s) { return String(s).trim(); }
 
-/** Parse le champ composition d'un plat en [{produit_id, nb_portions}].
+/** Parse le champ composition d'un plat en [{produit_id, grammes}].
  *  Formats acceptés : JSON [["P01",2],["P02",1]] ou "P01:2,P02:1". */
 function composition_(pl) {
   var raw = pl.composition;
@@ -869,58 +909,84 @@ function composition_(pl) {
     try {
       var arr = JSON.parse(s);
       arr.forEach(function (e) {
-        if (Array.isArray(e)) out.push({ produit_id: e[0], nb_portions: Number(e[1]) || 1 });
-        else out.push({ produit_id: e.produit_id || e.id, nb_portions: Number(e.nb_portions || e.n) || 1 });
+        if (Array.isArray(e)) out.push({ produit_id: e[0], grammes: Number(e[1]) || 0 });
+        else out.push({ produit_id: e.produit_id || e.id, grammes: Number(e.grammes || e.g) || 0 });
       });
       return out;
     } catch (err) { /* fallback texte */ }
   }
   s.split(',').forEach(function (part) {
     var kv = part.split(':').map(trim_);
-    if (kv[0]) out.push({ produit_id: kv[0], nb_portions: Number(kv[1]) || 1 });
+    if (kv[0]) out.push({ produit_id: kv[0], grammes: Number(kv[1]) || 0 });
   });
   return out;
 }
 
-/** Macros d'un plat : colonnes pré-calculées si présentes, sinon somme des ingrédients. */
+/**
+ * Macros POUR 100 g d'un plat : colonnes pré-calculées si présentes, sinon
+ * déduites de la composition. Un plat cuisiné n'a pas d'emballage : son
+ * « paquet » est la fournée, dont le poids est la somme des ingrédients
+ * (décision Azur, 2026-08-08). On somme donc les apports de la recette entière,
+ * puis on ramène à 100 g en divisant par ce poids total.
+ */
 function macrosOf_(platId, platsById) {
   var pl = platsById[platId];
   if (!pl) return { kcal: 0, prot_g: 0, fer_mg: 0 };
-  if (pl.kcal !== '' && pl.kcal != null) {
-    return { kcal: Number(pl.kcal) || 0, prot_g: Number(pl.prot_g) || 0, fer_mg: Number(pl.fer_mg) || 0 };
+  if (pl.kcal_100g !== '' && pl.kcal_100g != null) {
+    return {
+      kcal: Number(pl.kcal_100g) || 0,
+      prot_g: Number(pl.prot_100g) || 0,
+      fer_mg: Number(pl.fer_100g_mg) || 0
+    };
   }
   var produitsById = indexBy_(readTable_('produits'), 'id');
-  var m = { kcal: 0, prot_g: 0, fer_mg: 0 };
+  var tot = { kcal: 0, prot_g: 0, fer_mg: 0 };
+  var poids = 0;
   composition_(pl).forEach(function (c) {
     var pr = produitsById[c.produit_id];
     if (!pr) return;
-    m.kcal += (Number(pr.kcal) || 0) * c.nb_portions;
-    m.prot_g += (Number(pr.prot_g) || 0) * c.nb_portions;
-    m.fer_mg += (Number(pr.fer_mg) || 0) * c.nb_portions;
+    var r = c.grammes / 100;
+    tot.kcal += (Number(pr.kcal_100g) || 0) * r;
+    tot.prot_g += (Number(pr.prot_100g) || 0) * r;
+    tot.fer_mg += (Number(pr.fer_100g_mg) || 0) * r;
+    poids += c.grammes;
   });
-  return m;
+  if (!(poids > 0)) return { kcal: 0, prot_g: 0, fer_mg: 0 };
+  var k = 100 / poids;
+  return { kcal: tot.kcal * k, prot_g: tot.prot_g * k, fer_mg: tot.fer_mg * k };
 }
 
-/** Macros par portion d'un produit brut (colonnes kcal/prot_g/fer_mg). */
+/** Poids total d'une fournée = somme des ingrédients de la composition (g). */
+function poidsFournee_(pl) {
+  var poids = 0;
+  composition_(pl).forEach(function (c) { poids += c.grammes; });
+  return poids;
+}
+
+/** Macros POUR 100 g d'un produit brut. Multiplier par grammes/100 pour l'apport. */
 function macrosProduit_(produitId, produitsById) {
   var pr = produitsById[produitId];
   if (!pr) return { kcal: 0, prot_g: 0, fer_mg: 0 };
-  return { kcal: Number(pr.kcal) || 0, prot_g: Number(pr.prot_g) || 0, fer_mg: Number(pr.fer_mg) || 0 };
+  return {
+    kcal: Number(pr.kcal_100g) || 0,
+    prot_g: Number(pr.prot_100g) || 0,
+    fer_mg: Number(pr.fer_100g_mg) || 0
+  };
 }
 
 function platFaisable_(pl, stock) {
-  if (String(pl.type) === 'batch') return Number(stock[pl.id] || 0) >= 1;
+  if (String(pl.type) === 'batch') return Number(stock[pl.id] || 0) > 0;
   return composition_(pl).every(function (c) {
-    return Number(stock[c.produit_id] || 0) >= c.nb_portions;
+    return Number(stock[c.produit_id] || 0) >= c.grammes;
   });
 }
 
 /**
- * Consommation quotidienne moyenne PAR PRODUIT (portions/j) sur `jours` glissants.
+ * Consommation quotidienne moyenne PAR PRODUIT (grammes/j) sur `jours` glissants.
  * Compte tous les événements où un ingrédient quitte le stock :
  *  - log `produit` (conso au curseur) : le produit lui-même ;
  *  - log `plat` assemblage : ses ingrédients (composition × quantité) ;
- *  - log `batch_cuisine` : ses ingrédients (composition × portions produites).
+ *  - log `batch_cuisine` : ses ingrédients (la composition entière, une fois).
  * On ignore les plats batch mangés (ils consomment le stock du plat, les
  * ingrédients ayant déjà été décomptés à la cuisson) et les repas extérieurs.
  */
@@ -934,12 +1000,16 @@ function consoParProduitParJour_(platsById, produitsById, jours) {
     if (l.type === 'produit') {
       add(l.ref, q);
     } else if (l.type === 'batch_cuisine') {
+      // Cuisiner consomme la composition entière, une fois : q est le poids
+      // produit, pas un multiplicateur.
       var plb = platsById[l.ref];
-      if (plb) composition_(plb).forEach(function (c) { add(c.produit_id, c.nb_portions * q); });
+      if (plb) composition_(plb).forEach(function (c) { add(c.produit_id, c.grammes); });
     } else if (l.type === 'plat') {
       var pl = platsById[l.ref];
       if (!pl || String(pl.type) === 'batch') return;   // batch mangé → aucun ingrédient consommé
-      composition_(pl).forEach(function (c) { add(c.produit_id, c.nb_portions * q); });
+      var poids = poidsFournee_(pl);
+      var part = poids > 0 ? q / poids : 0;
+      composition_(pl).forEach(function (c) { add(c.produit_id, c.grammes * part); });
     }
   });
   var perDay = {};
@@ -1005,3 +1075,185 @@ function installTriggers() {
 }
 
 function clotureMedianeAuto_() { clotureMediane_(); }
+
+/* ===================================================================== */
+/* 12. MIGRATION « PORTIONS → GRAMMES » (2026-08-08)                      */
+/* ===================================================================== */
+
+/**
+ * Convertit un Sheet écrit dans l'ancien modèle (valeurs PAR PORTION, stock en
+ * portions) vers le nouveau (valeurs POUR 100 g, stock en grammes).
+ *
+ * À exécuter UNE FOIS depuis l'éditeur, AVANT setup(). Non destructif : le
+ * classeur est dupliqué d'abord, et rien n'est écrit si une conversion est
+ * impossible sans inventer un chiffre.
+ *
+ * Limite structurelle : convertir demande le poids d'une portion, qui n'existe
+ * nulle part — on ne peut que le déduire de `unite_de_vente` (« pot 500 g » ÷
+ * portions_par_unite). Les produits dont l'unité de vente ne porte aucun poids
+ * (« bocal », « sachet », « boîte de 6 ») sont donc INCONVERTIBLES : la
+ * fonction les laisse intacts et les liste. Il faut leur donner un poids à la
+ * main, puis relancer.
+ *
+ * Renvoie (et journalise) un rapport : convertis / en attente.
+ */
+function migrerEnGrammes() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var produits = readTable_('produits');
+  if (!produits.length) return { erreur: 'Onglet produits vide — rien à migrer.' };
+  if (produits[0].poids_paquet_g !== undefined) {
+    return { erreur: 'Déjà migré (colonne poids_paquet_g présente).' };
+  }
+
+  // 1. Poids d'une portion, par produit. Seule inconnue de toute la migration.
+  var portionG = {};
+  var bloquants = [];
+  produits.forEach(function (pr) {
+    var cont = contenanceEnGrammes_(pr.unite_de_vente);
+    var ppu = Number(pr.portions_par_unite) || 0;
+    if (cont > 0 && ppu > 0) portionG[pr.id] = cont / ppu;
+    else bloquants.push(pr.id + ' — ' + pr.nom + ' (unité de vente : « ' + pr.unite_de_vente + ' »)');
+  });
+
+  if (bloquants.length) {
+    Logger.log('MIGRATION IMPOSSIBLE — ' + bloquants.length + ' produit(s) sans poids déductible :\n'
+      + bloquants.join('\n'));
+    return {
+      migre: false,
+      motif: 'Poids d\'une portion indéductible pour ' + bloquants.length + ' produit(s).',
+      a_completer: bloquants,
+      remede: 'Écris une contenance dans unite_de_vente (ex. « bocal 400 g »), puis relance.'
+    };
+  }
+
+  // 2. Sauvegarde intégrale avant toute écriture.
+  var copie = ss.copy('Enthalpie — sauvegarde avant passage aux grammes ' +
+    Utilities.formatDate(new Date(), params_().tz || 'Europe/Paris', 'yyyy-MM-dd HH:mm'));
+
+  // 3. Logs : quantités en portions → grammes (avant de toucher aux tables).
+  var platsById = indexBy_(readTable_('plats'), 'id');
+  var shLog = sheet_('log');
+  var lv = shLog.getDataRange().getValues();
+  var hL = lv[0];
+  var iT = hL.indexOf('type'), iR = hL.indexOf('ref'), iQ = hL.indexOf('quantite');
+  for (var r = 1; r < lv.length; r++) {
+    var type = lv[r][iT], ref = lv[r][iR], q = Number(lv[r][iQ]) || 0;
+    var facteur = 0;
+    if (type === 'produit' || type === 'courses' || type === 'ajustement') facteur = portionG[ref] || 0;
+    else if (type === 'plat' || type === 'batch_cuisine') {
+      var pl = platsById[ref];
+      facteur = pl ? poidsCompositionAncienne_(pl, portionG) : 0;
+    }
+    if (facteur > 0) shLog.getRange(r + 1, iQ + 1).setValue(round2_(q * facteur));
+  }
+
+  // 4. Stock : portions → grammes.
+  var shStock = sheet_('stock');
+  var sv = shStock.getDataRange().getValues();
+  for (var s = 1; s < sv.length; s++) {
+    var ref2 = String(sv[s][0]);
+    var f2 = portionG[ref2] || poidsCompositionAncienne_(platsById[ref2] || {}, portionG);
+    if (f2 > 0) shStock.getRange(s + 1, 2).setValue(round2_((Number(sv[s][1]) || 0) * f2));
+  }
+  shStock.getRange(1, 2).setValue('grammes');
+
+  // 5. Compositions : nb_portions → grammes.
+  var shPlats = sheet_('plats');
+  var pv = shPlats.getDataRange().getValues();
+  var iComp = pv[0].indexOf('composition');
+  for (var p2 = 1; p2 < pv.length; p2++) {
+    var pl2 = platsById[String(pv[p2][0])];
+    if (!pl2) continue;
+    var conv = composition_(pl2).map(function (c) {
+      // composition_ lit désormais `grammes`, mais l'ancien contenu portait des
+      // portions : la valeur brute est la même, seule l'unité change.
+      return [c.produit_id, round2_(c.grammes * (portionG[c.produit_id] || 0))];
+    });
+    shPlats.getRange(p2 + 1, iComp + 1).setValue(JSON.stringify(conv));
+  }
+
+  // 6. Valeurs nutritionnelles : par portion → pour 100 g, et en-têtes.
+  convertirNutriments_('produits', portionG, ['kcal', 'prot_g', 'fer_mg'],
+    ['kcal_100g', 'prot_100g', 'fer_100g_mg']);
+  renommerColonne_('produits', 'portions_par_unite', 'poids_paquet_g', function (val, row) {
+    return round2_(contenanceEnGrammes_(row.unite_de_vente));
+  });
+  convertirNutrimentsPlats_(portionG, platsById);
+  renommerColonne_('recettes', 'portions_produites', 'poids_produit_g', function (val, row) {
+    var pl3 = platsById[row.plat_id];
+    return pl3 ? round2_(poidsCompositionAncienne_(pl3, portionG) * (Number(val) || 1)) : '';
+  });
+
+  Logger.log('Migration terminée. Sauvegarde : ' + copie.getUrl());
+  return {
+    migre: true,
+    produits: produits.length,
+    sauvegarde: copie.getUrl(),
+    suite: 'Lancer setup() puis redéployer (bash backend/deployer.sh).'
+  };
+}
+
+/** « pot 500 g » → 500 ; « brique 1 L » → 1000 ; « boîte de 6 » → 0. */
+function contenanceEnGrammes_(unite) {
+  var m = String(unite || '').toLowerCase().match(/(\d+(?:[.,]\d+)?)\s*(kg|g|cl|ml|l)\b/);
+  if (!m) return 0;
+  var v = parseFloat(m[1].replace(',', '.'));
+  if (!(v > 0)) return 0;
+  var mult = { kg: 1000, g: 1, l: 1000, cl: 10, ml: 1 }[m[2]] || 0;
+  return v * mult;
+}
+
+/** Poids (g) de la composition d'un plat, lue à l'ANCIENNE (en portions). */
+function poidsCompositionAncienne_(pl, portionG) {
+  var tot = 0;
+  composition_(pl).forEach(function (c) { tot += c.grammes * (portionG[c.produit_id] || 0); });
+  return tot;
+}
+
+/** Divise les colonnes par-portion par le poids de portion → pour 100 g. */
+function convertirNutriments_(onglet, portionG, avant, apres) {
+  var sh = sheet_(onglet);
+  var v = sh.getDataRange().getValues();
+  var idx = avant.map(function (h) { return v[0].indexOf(h); });
+  for (var r = 1; r < v.length; r++) {
+    var pg = portionG[String(v[r][0])] || 0;
+    if (!(pg > 0)) continue;
+    idx.forEach(function (i) {
+      if (i === -1) return;
+      sh.getRange(r + 1, i + 1).setValue(round2_((Number(v[r][i]) || 0) * 100 / pg));
+    });
+  }
+  idx.forEach(function (i, k) { if (i !== -1) sh.getRange(1, i + 1).setValue(apres[k]); });
+}
+
+/** Idem pour les plats, dont le diviseur est le poids de la composition. */
+function convertirNutrimentsPlats_(portionG, platsById) {
+  var sh = sheet_('plats');
+  var v = sh.getDataRange().getValues();
+  var cols = ['kcal', 'prot_g', 'fer_mg'];
+  var noms = ['kcal_100g', 'prot_100g', 'fer_100g_mg'];
+  var idx = cols.map(function (h) { return v[0].indexOf(h); });
+  for (var r = 1; r < v.length; r++) {
+    var pl = platsById[String(v[r][0])];
+    var pg = pl ? poidsCompositionAncienne_(pl, portionG) : 0;
+    if (!(pg > 0)) continue;
+    idx.forEach(function (i) {
+      if (i === -1 || v[r][i] === '') return;
+      sh.getRange(r + 1, i + 1).setValue(round2_((Number(v[r][i]) || 0) * 100 / pg));
+    });
+  }
+  idx.forEach(function (i, k) { if (i !== -1) sh.getRange(1, i + 1).setValue(noms[k]); });
+}
+
+/** Renomme une colonne et recalcule ses valeurs via `calcul(ancienne, ligne)`. */
+function renommerColonne_(onglet, avant, apres, calcul) {
+  var sh = sheet_(onglet);
+  var v = sh.getDataRange().getValues();
+  var i = v[0].indexOf(avant);
+  if (i === -1) return;
+  var lignes = readTable_(onglet);
+  for (var r = 1; r < v.length; r++) {
+    sh.getRange(r + 1, i + 1).setValue(calcul(v[r][i], lignes[r - 1] || {}));
+  }
+  sh.getRange(1, i + 1).setValue(apres);
+}

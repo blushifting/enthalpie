@@ -1108,12 +1108,22 @@ function migrerEnGrammes() {
   // 1. Poids d'une portion, par produit. Seule inconnue de toute la migration.
   var portionG = {};
   var bloquants = [];
+  var repeches = [];
   produits.forEach(function (pr) {
-    var cont = contenanceEnGrammes_(pr.unite_de_vente);
     var ppu = Number(pr.portions_par_unite) || 0;
+    var cont = contenanceEnGrammes_(pr.unite_de_vente);
+    // Le poids du paquet n'a jamais eu de colonne : il n'existe que dans le
+    // texte de l'unité de vente. Quand il n'y est pas, on le redemande à
+    // OpenFoodFacts — c'est de là qu'il venait au scan.
+    if (!(cont > 0) && pr.ean) {
+      cont = poidsDepuisOFF_(pr.ean);
+      if (cont > 0) repeches.push(pr.id + ' — ' + pr.nom + ' : ' + cont + ' g (OpenFoodFacts)');
+    }
     if (cont > 0 && ppu > 0) portionG[pr.id] = cont / ppu;
-    else bloquants.push(pr.id + ' — ' + pr.nom + ' (unité de vente : « ' + pr.unite_de_vente + ' »)');
+    else bloquants.push(pr.id + ' — ' + pr.nom + ' (unité de vente : « ' + pr.unite_de_vente + ' »'
+      + (pr.ean ? ', EAN ' + pr.ean + ' sans poids dans OpenFoodFacts' : ', pas d\'EAN') + ')');
   });
+  if (repeches.length) Logger.log('Poids récupérés depuis OpenFoodFacts :\n' + repeches.join('\n'));
 
   if (bloquants.length) {
     Logger.log('MIGRATION IMPOSSIBLE — ' + bloquants.length + ' produit(s) sans poids déductible :\n'
@@ -1191,6 +1201,29 @@ function migrerEnGrammes() {
     sauvegarde: copie.getUrl(),
     suite: 'Lancer setup() puis redéployer (bash backend/deployer.sh).'
   };
+}
+
+/**
+ * Poids net (g) d'un produit d'après OpenFoodFacts, ou 0. `product_quantity`
+ * est le champ numérique ; `quantity` est du texte libre, souvent un simple
+ * compte (« 6 pcs »), d'où le repli sur une lecture de la contenance.
+ */
+function poidsDepuisOFF_(ean) {
+  var code = String(ean || '').replace(/\D/g, '');
+  if (!code) return 0;
+  try {
+    var res = UrlFetchApp.fetch(
+      'https://world.openfoodfacts.org/api/v2/product/' + code +
+      '.json?fields=quantity,product_quantity',
+      { muteHttpExceptions: true, followRedirects: true });
+    if (res.getResponseCode() !== 200) return 0;
+    var p = (JSON.parse(res.getContentText()) || {}).product || {};
+    var n = Number(p.product_quantity);
+    if (n > 0) return Math.round(n);
+    return Math.round(contenanceEnGrammes_(p.quantity));
+  } catch (err) {
+    return 0;   // réseau ou fiche illisible → produit simplement listé à compléter
+  }
 }
 
 /** « pot 500 g » → 500 ; « brique 1 L » → 1000 ; « boîte de 6 » → 0. */

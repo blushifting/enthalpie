@@ -87,10 +87,11 @@ function stockMeta(food) {
 /** Bloc info (toggle « ⓘ nutri ») : état du paquet en cours et macros /100 g. */
 function infoBlock(food, meta) {
   const m = food.macros || {};
+  // Le poids du paquet reste écrit : c'est l'ancre qui donne son sens au %.
   const etat = meta.inconnu
     ? `${num(Math.round(meta.stock))} g en stock · poids du paquet inconnu`
-    : `paquet de ${num(meta.paquet)} g · ${num(Math.round(meta.ouvert))} g restants dedans`
-      + (meta.reserve > 0 ? ` · ${num(Math.round(meta.reserve / meta.paquet))} d'avance` : '');
+    : `paquet de ${num(meta.paquet)} g · il en reste ${100 - meta.pct} %`
+      + (meta.reserve > 0 ? ` · ${num(Math.round(meta.reserve / meta.paquet))} paquet(s) d'avance` : '');
 
   return h('div', { class: 'inv-row__info' },
     h('div', { class: 'inv-row__info-line' }, etat),
@@ -111,7 +112,13 @@ function invRow(food, onChange) {
   const ref = meta.paquet > 0 ? meta.paquet : meta.stock;
   const depart = meta.pct;
 
-  const level = h('span', { class: 'inv-row__level' }, `${num(Math.round(meta.stock))} g`);
+  // Affichage en POURCENTAGE : on raisonne en part de paquet, pas en grammes —
+  // « il reste 40 % » se visualise, « il reste 83 g » demande un calcul.
+  const restant = (pct) => (meta.inconnu
+    ? `${num(Math.round(meta.stock))} g`
+    : `reste ${100 - pct} %` + (meta.reserve > 0
+        ? ` +${Math.round(meta.reserve / meta.paquet)} paq.` : ''));
+  const level = h('span', { class: 'inv-row__level' }, restant(meta.pct));
   const delta = h('div', { class: 'inv-row__delta', hidden: true });
   const slider = h('input', {
     type: 'range', class: 'inv-row__slider',
@@ -134,19 +141,36 @@ function invRow(food, onChange) {
   // Grammes en jeu depuis la position validée : > 0 mangé, < 0 correction.
   const grammes = () => ((val() - depart) / 100) * ref;
 
+  /**
+   * Colore la piste : bleu jusqu'à la part DÉJÀ validée, ambre sur la part en
+   * cours de saisie, gris ensuite. Le curseur montre ainsi d'un coup d'œil ce
+   * qui est acquis et ce qui ne l'est pas encore.
+   */
+  function paintTrack() {
+    const a = Math.min(depart, val());
+    const b = Math.max(depart, val());
+    slider.style.background = 'linear-gradient(to right,'
+      + ` var(--accent) 0 ${a}%,`
+      + ` var(--warn) ${a}% ${b}%,`
+      + ` var(--surface-2) ${b}% 100%)`;
+  }
+
   function renderLevel() {
     const g = grammes();
+    const dp = val() - depart;              // écart en points de pourcentage
     row.classList.toggle('is-dirty', dirty());
+    paintTrack();
+    level.textContent = restant(val());
     if (!dirty()) { delta.hidden = true; return; }
     const r = Math.abs(g) / 100;
     if (g > 0) {
       delta.className = 'inv-row__delta is-eat';
-      delta.textContent = `🍽 ${num(Math.round(g))} g · ${num(Math.round(m.kcal * r))} kcal · `
+      delta.textContent = `🍽 ${dp} % du paquet · ${num(Math.round(m.kcal * r))} kcal · `
         + `${num(Math.round(m.prot_g * r * 10) / 10)} g prot`;
     } else {
       // Reculer le curseur = « je n'avais pas mangé ça » → remise au stock.
       delta.className = 'inv-row__delta is-undo';
-      delta.textContent = `↩ correction : ${num(Math.round(-g))} g remis en stock`;
+      delta.textContent = `↩ correction : ${-dp} % rendus au stock`;
     }
     delta.hidden = false;
   }

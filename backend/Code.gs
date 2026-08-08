@@ -1295,6 +1295,17 @@ function convertirNutrimentsPlats_(portionG, platsById) {
  * depuis l'éditeur ne puisse rien détruire.
  *   reinitialiserDonnees('EFFACER')
  */
+/**
+ * Point d'entrée SANS ARGUMENT, à lancer depuis le menu de l'éditeur — lequel
+ * ne sait pas passer de paramètre. Le nom en majuscules tient lieu de garde-fou
+ * dans une liste déroulante où l'on clique vite.
+ */
+function EFFACER_TOUT_ET_RECOMMENCER() {
+  var r = reinitialiserDonnees('EFFACER');
+  Logger.log(JSON.stringify(r, null, 2));
+  return r;
+}
+
 function reinitialiserDonnees(confirmation) {
   if (confirmation !== 'EFFACER') {
     return {

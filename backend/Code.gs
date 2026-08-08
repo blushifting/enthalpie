@@ -283,10 +283,14 @@ function getState_() {
 }
 
 function getCatalog_() {
-  return {
-    produits: readTable_('produits').filter(actif_),
-    plats: readTable_('plats').filter(actif_)
-  };
+  // Un plat cuisiné n'a pas d'emballage : son « paquet » est la fournée. Le
+  // front en a besoin comme référence du curseur (% de la fournée mangé), et
+  // ce poids n'est pas une colonne — il se déduit de la composition.
+  var plats = readTable_('plats').filter(actif_).map(function (pl) {
+    pl.poids_fournee_g = Math.round(poidsFournee_(pl));
+    return pl;
+  });
+  return { produits: readTable_('produits').filter(actif_), plats: plats };
 }
 
 /** Recherche catalogue (tuile « ➕ autre » / scan) : produits actifs par nom ou EAN. */

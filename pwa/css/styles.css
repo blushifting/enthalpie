@@ -379,6 +379,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .inv-row__delta[hidden] { display: none; }
 .inv-row__delta.is-eat { background: color-mix(in srgb, var(--prot) 20%, var(--surface)); color: var(--prot); }
 .inv-row__delta.is-add { background: var(--surface-2); color: var(--txt-muted); }
+/* Curseur reculé = correction d'une saisie : remise au stock, pas une conso. */
+.inv-row__delta.is-undo { background: color-mix(in srgb, var(--warn) 18%, var(--surface)); color: var(--warn); }
 
 /* Curseur modifié depuis la dernière validation : surligné. */
 .inv-row.is-dirty {

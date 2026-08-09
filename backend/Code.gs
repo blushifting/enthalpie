@@ -101,8 +101,8 @@ function seedDefaults_() {
     //  - protéines 110 g/j (1,7 g/kg)  - calories 2850 kcal/j (point de départ, à calibrer)
     //  - fibres 30 g/j (fenêtre 25–35 g)
     appendRow_('objectifs', {
-      kcal_jour: 2850, prot_g_jour: 110, fibres_g_jour: 30,
-      tol_kcal: 200, tol_prot: 10, tol_fibres: 5,
+      kcal_jour: 2850, prot_g_jour: 110, fibres_g_jour: FIBRES_DEFAUT.cible,
+      tol_kcal: 200, tol_prot: 10, tol_fibres: FIBRES_DEFAUT.tolerance,
       mode_strict_gluten: 'off', mode_strict_lactose: 'off'
     });
   }
@@ -164,10 +164,55 @@ function params_() {
   return out;
 }
 
+// Cible fibres du skill nutrition §6, utilisée à deux endroits : le pré-remplissage
+// d'un Sheet neuf (seedDefaults_) et le rattrapage d'un Sheet déjà rempli
+// (assurerCibleFibres_). Une seule définition pour que les deux ne divergent pas.
+var FIBRES_DEFAUT = { cible: 30, tolerance: 5 };
+
 /** Objet objectifs (première ligne). */
 function objectifs_() {
+  assurerCibleFibres_();
   var rows = readTable_('objectifs');
   return rows[0] || {};
+}
+
+var _cibleFibresVerifiee = false;
+
+/**
+ * Rattrapage automatique de la cible fibres (2026-08-09), au plus une fois par
+ * exécution.
+ *
+ * Pourquoi ça ne peut pas passer par setup() : `seedDefaults_` ne s'exécute que
+ * si l'onglet est VIDE, et `setup()` ne réécrit que la ligne d'en-tête. Sur un
+ * Sheet en service, les deux nouvelles cellules resteraient donc vides — la
+ * cible vaudrait 0, `gauge_` renverrait `ratio: null` et la PWA afficherait la
+ * jauge en mode « informatif ». Panne parfaitement silencieuse, sans la moindre
+ * erreur : c'est exactement le genre de piège qu'on ne veut pas laisser
+ * dépendre d'un geste manuel.
+ *
+ * N'écrase jamais une valeur existante : si la cible a été ajustée à la main
+ * dans le Sheet, elle est conservée.
+ */
+function assurerCibleFibres_() {
+  if (_cibleFibresVerifiee) return;
+  _cibleFibresVerifiee = true;
+  try {
+    var sh = sheet_('objectifs');
+    var largeur = SCHEMA.objectifs.length;
+    var entetes = sh.getRange(1, 1, 1, largeur).getValues()[0];
+    if (entetes.join('') !== SCHEMA.objectifs.join('')) {
+      sh.getRange(1, 1, 1, largeur).setValues([SCHEMA.objectifs]).setFontWeight('bold');
+    }
+    if (sh.getLastRow() < 2) return;          // onglet sans données : seedDefaults_ s'en charge
+    var cF = SCHEMA.objectifs.indexOf('fibres_g_jour') + 1;
+    var cT = SCHEMA.objectifs.indexOf('tol_fibres') + 1;
+    if (!sh.getRange(2, cF).getValue()) sh.getRange(2, cF).setValue(FIBRES_DEFAUT.cible);
+    if (!sh.getRange(2, cT).getValue()) sh.getRange(2, cT).setValue(FIBRES_DEFAUT.tolerance);
+  } catch (e) {
+    // Une lecture ne doit jamais échouer à cause d'une migration : au pire la
+    // jauge reste « informative », ce qui est le comportement d'avant.
+    Logger.log('assurerCibleFibres_ : ' + e);
+  }
 }
 
 /* ===================================================================== */
@@ -1087,28 +1132,17 @@ function clotureMedianeAuto_() { /* retiré — voir desinstallerTriggers() */ }
 /* ===================================================================== */
 
 /**
- * Inscrit la cible fibres dans un onglet `objectifs` DÉJÀ rempli.
- * À exécuter UNE FOIS depuis l'éditeur, après avoir collé cette version.
+ * Vérification manuelle de la cible fibres — **facultative**.
  *
- * seedDefaults_ ne sert que pour un Sheet neuf : il ne fait rien dès qu'une
- * ligne existe. setup(), lui, réécrit les en-têtes mais laisse les cellules de
- * données vides. Sans cette migration, `fibres_g_jour` vaut '' → la cible
- * tombe à 0 → gauge_ renvoie ratio null → la PWA affiche la jauge en mode
- * « informatif ». Panne silencieuse : c'est la première chose à vérifier si la
- * jauge fibres ne se colore pas.
+ * Le rattrapage est automatique : `assurerCibleFibres_()` s'exécute à la
+ * première lecture qui touche `objectifs` (voir §3). Cette fonction ne sert
+ * qu'à le déclencher et à le constater depuis l'éditeur, sans passer par la
+ * PWA. Elle n'écrase jamais une valeur saisie à la main.
  *
  * Valeurs : skill-nutrition/SKILL.md §6 et §12 (30 g/j, tolérance ±5 g).
  */
 function migrerFibres() {
-  setup();                                    // écrit les 2 nouvelles en-têtes
-  var sh = sheet_('objectifs');
-  var headers = sh.getRange(1, 1, 1, SCHEMA.objectifs.length).getValues()[0];
-  var cF = headers.indexOf('fibres_g_jour') + 1;
-  var cT = headers.indexOf('tol_fibres') + 1;
-  if (!cF || !cT) throw new Error('En-têtes fibres absentes — setup() a échoué ?');
-  if (!sh.getRange(2, cF).getValue()) sh.getRange(2, cF).setValue(30);
-  if (!sh.getRange(2, cT).getValue()) sh.getRange(2, cT).setValue(5);
-  var obj = objectifs_();
+  var obj = objectifs_();                     // déclenche assurerCibleFibres_
   Logger.log('Cible fibres : ' + obj.fibres_g_jour + ' g/j (±' + obj.tol_fibres + ')');
   return { fibres_g_jour: obj.fibres_g_jour, tol_fibres: obj.tol_fibres };
 }

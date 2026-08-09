@@ -530,6 +530,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .qty__reste { font-size: 12.5px; color: var(--txt-muted); }
 .qty__reste.is-neg { color: var(--danger); }
 
+/* Enveloppe posée par thumbOnlySlider() : c'est ELLE qui reçoit les gestes,
+   l'input étant rendu inerte pour tuer le glissement natif (un appui sur la
+   piste ne doit rien faire — seule la pastille se saisit). Le padding vertical
+   rend toute la hauteur de la pastille attrapable, alors que la boîte de
+   l'input ne fait que 8 px. */
+.slider-wrap { display: block; padding: 11px 0; touch-action: pan-y; }
+.slider-wrap > input[type="range"] { pointer-events: none; display: block; }
+
 .qty__slider, .inv-row__slider {
   -webkit-appearance: none; appearance: none; width: 100%; height: 8px;
   border-radius: 999px; background: var(--surface-2); outline: none;
@@ -537,7 +545,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
      pas déplacer le curseur : on rend le geste vertical au navigateur. */
   touch-action: pan-y;
 }
-.qty__slider { margin: 6px 0 16px; }
+/* Marges réduites d'autant : le padding de .slider-wrap prend déjà 11 px. */
+.qty__slider { margin: 0 0 5px; }
 .qty__slider::-webkit-slider-thumb, .inv-row__slider::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 30px; height: 30px; border-radius: 50%;

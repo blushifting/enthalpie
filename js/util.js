@@ -21,6 +21,78 @@ export function h(tag, attrs = {}, ...children) {
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
+// Diamètre de la pastille — doit rester synchro avec `::-webkit-slider-thumb`
+// dans styles.css.
+const THUMB_PX = 30;
+
+/**
+ * Emballe un `<input type=range>` pour qu'il ne bouge QUE si la prise démarre
+ * sur la pastille : un appui ailleurs sur la piste, ou un frôlement pendant
+ * qu'on fait défiler la liste, ne doit rien changer.
+ *
+ * Le geste natif du navigateur ne peut pas être filtré de façon fiable (sur
+ * mobile il passe par les événements *touch*, que `preventDefault()` sur
+ * `pointerdown` ne bloque pas). On le neutralise donc complètement
+ * (`pointer-events: none` sur l'input, cf. `.slider-wrap` dans styles.css) et
+ * on pilote la valeur nous-mêmes depuis le wrapper.
+ *
+ * Le clavier reste natif (l'input garde le focus et ses flèches).
+ * Renvoie l'élément à insérer dans le DOM à la place de l'input.
+ */
+export function thumbOnlySlider(input) {
+  const wrap = h('div', { class: 'slider-wrap' }, input);
+
+  const geom = () => {
+    const r = input.getBoundingClientRect();
+    const min = Number(input.min) || 0;
+    const max = Number(input.max);
+    return { left: r.left, min, span: (max - min) || 1, usable: Math.max(1, r.width - THUMB_PX) };
+  };
+  // Abscisse du centre de la pastille pour la valeur courante.
+  const centre = () => {
+    const { left, min, span, usable } = geom();
+    const ratio = Math.min(1, Math.max(0, (Number(input.value) - min) / span));
+    return left + THUMB_PX / 2 + ratio * usable;
+  };
+
+  let dragging = false;
+  let saisie = 0;            // écart doigt ↔ centre au départ : évite le saut initial
+
+  wrap.addEventListener('pointerdown', (e) => {
+    if (input.disabled) return;
+    if (Math.abs(e.clientX - centre()) > THUMB_PX / 2) return;   // pas sur la pastille
+    dragging = true;
+    saisie = e.clientX - centre();
+    try { wrap.setPointerCapture(e.pointerId); } catch { /* pointeur déjà parti */ }
+    e.preventDefault();
+    input.focus({ preventScroll: true });
+  });
+
+  wrap.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const { left, min, span, usable } = geom();
+    const step = Number(input.step) || 1;
+    const ratio = (e.clientX - saisie - left - THUMB_PX / 2) / usable;
+    const brut = min + Math.min(1, Math.max(0, ratio)) * span;
+    const v = Math.min(Number(input.max), Math.max(min, min + Math.round((brut - min) / step) * step));
+    if (String(v) === input.value) return;
+    input.value = String(v);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
+  const fin = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { wrap.releasePointerCapture(e.pointerId); } catch { /* capture déjà relâchée */ }
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  wrap.addEventListener('pointerup', fin);
+  wrap.addEventListener('pointercancel', fin);
+
+  return wrap;
+}
+
 /** Vide un noeud. */
 export function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
 

@@ -19,7 +19,9 @@
   /* Accents par jauge */
   --prot:  #59c896;   /* protéines — vert */
   --kcal:  #e0a458;   /* calories  — ambre */
-  --fibres: #8aa0d8;  /* fibres    — bleu sourd (distinct du vert prot et de l'ambre kcal) */
+  /* fibres — vert feuille. Volontairement jaune-vert (teinte ~90°) et non menthe
+     comme --prot (~156°) : deux anneaux voisins doivent rester distinguables. */
+  --fibres: #8fbf5a;
   --accent: #7aa2f7;  /* actions   — bleu doux */
 
   --ok:    #59c896;

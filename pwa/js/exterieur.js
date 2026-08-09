@@ -3,7 +3,7 @@
 // catalogue) puis on ajuste kcal et protéines au curseur.
 // Confirmation → onLog({kcal, prot_g, ref}) : compté dans les jauges du
 // jour, sans toucher au stock (aucun ingrédient consommé).
-import { h, clear, num } from './util.js';
+import { h, clear, num, thumbOnlySlider } from './util.js';
 
 const KCAL_MAX = 2000;
 const PROT_MAX = 80;
@@ -70,10 +70,10 @@ export function openExterieur(presets, onLog) {
     h('div', { class: 'qty__chips' }, ...chips.map((c) => c.chip)),
     h('div', { class: 'ext-slider' },
       h('label', { class: 'ext-slider__lbl' }, 'Calories'),
-      kcalSlider),
+      thumbOnlySlider(kcalSlider)),
     h('div', { class: 'ext-slider' },
       h('label', { class: 'ext-slider__lbl' }, 'Protéines'),
-      protSlider),
+      thumbOnlySlider(protSlider)),
     h('div', { class: 'qty__preview' },
       h('div', { class: 'qty__stat qty__stat--prot' }, protStat, h('span', {}, 'g prot')),
       h('div', { class: 'qty__stat qty__stat--kcal' }, kcalStat, h('span', {}, 'kcal'))),

@@ -11,7 +11,7 @@
  *   GET  ?token=…&action=catalog        → produits + plats actifs
  *   GET  ?token=…&action=courses        → liste de courses (par magasin/rayon)
  *   GET  ?token=…&action=cuisine        → recette de la semaine + biblio batch + compteurs
- *   GET  ?token=…&action=bilan          → moyennes hebdo prot/kcal vs cibles (4 sem.)
+ *   GET  ?token=…&action=bilan          → prot/kcal vs cibles : 7 derniers jours + 4 sem.
  *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement | exterieur
  *
  * Conforme à SPEC.md §3 (modèle de données) et §5-6 (moteur / liste).
@@ -410,9 +410,18 @@ function getCuisine_() {
   };
 }
 
-/** Bilan 4 semaines glissantes : moyennes journalières prot/kcal vs cibles (SPEC §4.4). */
+/**
+ * Bilan prot/kcal vs cibles (SPEC §4.4), servi aux deux échelles que propose
+ * l'écran : `jours` (les 7 derniers jours, un point par jour) et `semaines`
+ * (4 semaines glissantes, moyenne journalière). Les deux se lisent contre les
+ * mêmes cibles — une cible est journalière, la moyenne hebdo ne la change pas.
+ */
 function getBilan_() {
-  return moyennesHebdo_(params_().tz || 'Europe/Paris', 4);
+  var tz = params_().tz || 'Europe/Paris';
+  var parJour = intakeParJour_(tz);              // un seul balayage du journal
+  var bilan = moyennesHebdo_(tz, 4, parJour);
+  bilan.jours = joursRecents_(tz, 7, parJour);
+  return bilan;
 }
 
 /** Apports journaliers reconstruits du journal : plats (médian inclus) + produits bruts. */
@@ -440,12 +449,14 @@ function intakeParJour_(tz) {
  * aujourd'hui), du plus ancien au plus récent, + cibles/tolérances + streak
  * protéines (nb de semaines récentes consécutives dans la fenêtre prot). La
  * semaine courante est partielle : on divise par les jours écoulés, pas 7.
+ * `parJour` est optionnel (recalculé si absent) — getBilan_ le partage avec
+ * joursRecents_ pour ne lire le journal qu'une fois.
  */
-function moyennesHebdo_(tz, nb) {
-  var parJour = intakeParJour_(tz);
+function moyennesHebdo_(tz, nb, parJour) {
+  parJour = parJour || intakeParJour_(tz);
   var obj = objectifs_();
   var JOURS = 7;
-  var today = new Date(Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd') + 'T12:00:00');
+  var today = midiDuJour_(tz);
   var semaines = [];
   for (var w = nb - 1; w >= 0; w--) {
     var fin = new Date(today.getTime() - w * JOURS * 86400000);
@@ -489,6 +500,37 @@ function moyennesHebdo_(tz, nb) {
     semaines: semaines,
     streak_prot: streak
   };
+}
+
+/** Aujourd'hui dans `tz`, calé à midi : l'arithmétique en jours ignore l'heure d'été. */
+function midiDuJour_(tz) {
+  return new Date(Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd') + 'T12:00:00');
+}
+
+var JOURS_FR_ = ['dim.', 'lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.'];
+
+/**
+ * Les `nb` derniers jours finissant aujourd'hui, du plus ancien au plus récent :
+ * l'apport réel du jour, pas une moyenne. `a_donnees` distingue « rien saisi »
+ * (pas de clôture médiane depuis le 2026-08-08) d'un vrai zéro.
+ */
+function joursRecents_(tz, nb, parJour) {
+  parJour = parJour || intakeParJour_(tz);
+  var today = midiDuJour_(tz);
+  var jours = [];
+  for (var d = nb - 1; d >= 0; d--) {
+    var jour = new Date(today.getTime() - d * 86400000);
+    var iso = Utilities.formatDate(jour, tz, 'yyyy-MM-dd');
+    var b = parJour[iso];
+    jours.push({
+      date: iso,
+      label: d === 0 ? 'Auj.' : JOURS_FR_[jour.getDay()],
+      a_donnees: !!b,
+      kcal: round1_(b ? b.kcal : 0),
+      prot_g: round1_(b ? b.prot_g : 0)
+    });
+  }
+  return jours;
 }
 
 /** Timestamp (Date ou chaîne) → ms epoch. */

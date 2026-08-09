@@ -454,6 +454,15 @@
         }
       }
     ],
+    "jours": [
+      { "date": "2026-07-04", "label": "sam.", "a_donnees": true,  "kcal": 3020, "prot_g": 118 },
+      { "date": "2026-07-05", "label": "dim.", "a_donnees": true,  "kcal": 2640, "prot_g": 101 },
+      { "date": "2026-07-06", "label": "lun.", "a_donnees": true,  "kcal": 2900, "prot_g": 115 },
+      { "date": "2026-07-07", "label": "mar.", "a_donnees": true,  "kcal": 2870, "prot_g": 109 },
+      { "date": "2026-07-08", "label": "mer.", "a_donnees": true,  "kcal": 2650, "prot_g": 102 },
+      { "date": "2026-07-09", "label": "jeu.", "a_donnees": true,  "kcal": 2910, "prot_g": 114 },
+      { "date": "2026-07-10", "label": "Auj.", "a_donnees": true,  "kcal": 2810, "prot_g": 108 }
+    ],
     "streak_prot": 3
   }
 }

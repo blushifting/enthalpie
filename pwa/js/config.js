@@ -13,6 +13,7 @@ export const KEY = {
   courses: 'enthalpie.courses.cache',
   cuisine: 'enthalpie.cuisine.cache',
   bilan:   'enthalpie.bilan.cache',
+  bilanMode: 'enthalpie.bilan.mode',     // échelle de l'écran Bilan : jour | semaine
   manual:  'enthalpie.courses.manual',   // ajouts manuels (texte libre)
   draft:   'enthalpie.courses.draft',    // cases cochées + quantités ajustées
   exclus:  'enthalpie.courses.exclus',   // articles « ne plus proposer »

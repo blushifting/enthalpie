@@ -1,40 +1,82 @@
-// Écran « Bilan » (lecture seule) : moyennes journalières hebdo prot/kcal vs
-// cibles sur 4 semaines glissantes + streak protéines (SPEC §4.4, §7).
+// Écran « Bilan » (lecture seule) : prot/kcal vs cibles, à deux échelles au
+// choix — les 7 derniers jours (un point par jour) ou 4 semaines glissantes
+// (moyenne journalière) — + streak protéines (SPEC §4.4, §7).
 // Graphiques SVG maison, zéro dépendance.
 import { h, clear, num, frDate } from './util.js';
+import { store } from './store.js';
 
 const METRICS = [
   { key: 'prot_g', label: 'Protéines', unit: 'g',    kind: 'prot' },
   { key: 'kcal',   label: 'Calories',  unit: 'kcal', kind: 'kcal' },
 ];
 
-/** Mini graphe en barres (une barre par semaine) + ligne de cible. */
-function metricChart(metric, semaines, cible, tol) {
-  const vals = semaines.map((s) => Number((s.moyennes || {})[metric.key]) || 0);
+const MODES = {
+  jour: {
+    onglet: 'Jour',
+    caption: 'Bilan · 7 jours',
+    hint: 'Par jour',
+    unite: (u) => u,                  // valeur brute du jour
+  },
+  semaine: {
+    onglet: 'Semaine',
+    caption: 'Bilan · 4 semaines',
+    hint: 'Moyenne journalière',
+    unite: (u) => `${u}/j`,           // moyenne par jour
+  },
+};
+
+/**
+ * Points à tracer pour un mode donné : { label, value, vide }.
+ * `vide` = rien de saisi ce jour-là (pas de clôture médiane), à distinguer d'un
+ * vrai zéro ; une semaine sans aucune saisie est traitée pareil.
+ */
+function serie(mode, data, metricKey) {
+  if (mode === 'jour') {
+    return (data.jours || []).map((j) => ({
+      label: j.label || frDate(j.date),
+      value: Number(j[metricKey]) || 0,
+      vide: !j.a_donnees,
+    }));
+  }
+  return (data.semaines || []).map((s) => ({
+    label: s.label || '',
+    value: Number((s.moyennes || {})[metricKey]) || 0,
+    vide: !s.jours_avec_donnees,
+  }));
+}
+
+/** Mini graphe en barres (une barre par point) + ligne de cible. */
+function metricChart(metric, points, cible, tol) {
   const hasCible = Number(cible) > 0;
-  const top = Math.max(hasCible ? cible : 0, ...vals, 1) * 1.2;
+  const top = Math.max(hasCible ? cible : 0, ...points.map((p) => p.value), 1) * 1.2;
 
   const W = 320, H = 132, padT = 16, padB = 24, padX = 6;
   const plotH = H - padT - padB, plotW = W - padX * 2;
-  const n = vals.length || 1;
+  const n = points.length || 1;
   const slot = plotW / n;
   const bw = Math.min(52, slot * 0.5);
+  const base = padT + plotH;
 
   const y = (v) => padT + plotH * (1 - v / top);
   const inWindow = (v) => !hasCible || v >= cible - (Number(tol) || 0);
 
-  const bars = vals.map((v, i) => {
+  const bars = points.map((p, i) => {
     const x = padX + slot * i + (slot - bw) / 2;
-    const yv = y(v);
-    const bh = Math.max(0, padT + plotH - yv);
-    const cls = `mc-bar mc-bar--${metric.kind}${inWindow(v) ? '' : ' is-under'}${i === vals.length - 1 ? ' is-current' : ''}`;
+    // Jour sans saisie : un simple trait sur la ligne de base, pas une barre à
+    // zéro — l'app ne prétend pas savoir qu'on n'a rien mangé.
+    if (p.vide) {
+      return `<line x1="${x.toFixed(1)}" x2="${(x + bw).toFixed(1)}" y1="${base}" y2="${base}" class="mc-empty"></line>`;
+    }
+    const yv = y(p.value);
+    const bh = Math.max(0, base - yv);
+    const cls = `mc-bar mc-bar--${metric.kind}${inWindow(p.value) ? '' : ' is-under'}${i === points.length - 1 ? ' is-current' : ''}`;
     return `<rect x="${x.toFixed(1)}" y="${yv.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="5" class="${cls}"></rect>`
-      + `<text x="${(x + bw / 2).toFixed(1)}" y="${(yv - 5).toFixed(1)}" class="mc-val" text-anchor="middle">${num(v)}</text>`;
+      + `<text x="${(x + bw / 2).toFixed(1)}" y="${(yv - 5).toFixed(1)}" class="mc-val" text-anchor="middle">${num(p.value)}</text>`;
   }).join('');
 
-  const labels = semaines.map((s, i) => {
+  const labels = points.map((p, i) => {
     const x = padX + slot * i + slot / 2;
-    return `<text x="${x.toFixed(1)}" y="${(H - 8).toFixed(1)}" class="mc-lbl" text-anchor="middle">${s.label || ''}</text>`;
+    return `<text x="${x.toFixed(1)}" y="${(H - 8).toFixed(1)}" class="mc-lbl" text-anchor="middle">${p.label}</text>`;
   }).join('');
 
   let cibleLine = '';
@@ -43,48 +85,72 @@ function metricChart(metric, semaines, cible, tol) {
     cibleLine = `<line x1="${padX}" x2="${W - padX}" y1="${yc}" y2="${yc}" class="mc-cible"></line>`;
   }
 
-  return `<svg viewBox="0 0 ${W} ${H}" class="metric-chart" role="img" aria-label="${metric.label} par semaine">${cibleLine}${bars}${labels}</svg>`;
+  // Au-delà de 5 barres les valeurs se touchent : on rapetisse les chiffres.
+  const dense = points.length > 5 ? ' metric-chart--dense' : '';
+  return `<svg viewBox="0 0 ${W} ${H}" class="metric-chart${dense}" role="img" aria-label="${metric.label} — ${points.length} points">${cibleLine}${bars}${labels}</svg>`;
 }
 
-function metricBlock(metric, data) {
-  const semaines = data.semaines || [];
+function metricBlock(metric, data, mode) {
+  const points = serie(mode, data, metric.key);
   const cible = Number((data.cibles || {})[metric.key]) || 0;
   const tol = Number((data.tolerances || {})[metric.key]) || 0;
-  const last = semaines.length ? (semaines[semaines.length - 1].moyennes || {}) : {};
-  const current = Number(last[metric.key]) || 0;
+  const last = points.length ? points[points.length - 1] : null;
   const cibleTxt = cible > 0 ? `cible ${num(cible)} ${metric.unit}/j` : 'informatif';
 
   return h('section', { class: `bilan-metric bilan-metric--${metric.kind}` },
     h('div', { class: 'bilan-metric__head' },
       h('span', { class: 'bilan-metric__label' }, metric.label),
       h('span', { class: 'bilan-metric__now' },
-        h('b', {}, num(current)), ` ${metric.unit}/j `,
+        last && !last.vide
+          ? [h('b', {}, num(last.value)), ` ${MODES[mode].unite(metric.unit)} `]
+          : h('span', { class: 'bilan-metric__vide' }, 'rien saisi '),
         h('span', { class: 'bilan-metric__cible' }, `· ${cibleTxt}`))),
-    h('div', { html: metricChart(metric, semaines, cible, tol) }));
+    h('div', { html: metricChart(metric, points, cible, tol) }));
 }
 
-/** @param root conteneur @param data { cibles, tolerances, semaines:[...], streak_prot } */
+/** Bascule jour / semaine ; le choix est mémorisé d'une visite à l'autre. */
+function echelleToggle(mode, onPick) {
+  const btn = (m) => h('button', {
+    type: 'button',
+    class: `echelle__opt ${m === mode ? 'is-on' : ''}`,
+    'aria-pressed': m === mode ? 'true' : 'false',
+    onclick: () => { if (m !== mode) onPick(m); },
+  }, MODES[m].onglet);
+  return h('div', { class: 'echelle', role: 'group', 'aria-label': 'Échelle de temps' },
+    btn('jour'), btn('semaine'));
+}
+
+/** @param root conteneur @param data { cibles, tolerances, jours:[...], semaines:[...], streak_prot } */
 export function renderBilan(root, data) {
   const d = data || { semaines: [] };
+  // Un backend pas encore redéployé ne renvoie pas `jours` : on reste en hebdo.
+  const parJourDispo = Array.isArray(d.jours) && d.jours.length > 0;
+  const mode = parJourDispo ? store.getBilanMode() : 'semaine';
   clear(root);
 
   if (d.__offline) {
     root.append(h('div', { class: 'offline-banner' }, '⚡ Hors-ligne — dernier bilan connu'));
   }
 
-  root.append(h('p', { class: 'day-caption' }, 'Bilan · 4 semaines'));
-
   const semaines = d.semaines || [];
   const withData = semaines.filter((s) => s.jours_avec_donnees > 0);
   if (!withData.length) {
+    root.append(h('p', { class: 'day-caption' }, 'Bilan'));
     root.append(h('div', { class: 'state', style: 'padding:48px 8px' },
       h('div', { class: 'state__icon' }, '📈'),
       h('div', { class: 'state__title' }, 'Pas encore de données'),
-      h('div', { class: 'state__msg' }, 'Les moyennes hebdomadaires apparaîtront après quelques jours de suivi.')));
+      h('div', { class: 'state__msg' }, 'Les courbes apparaîtront après quelques jours de suivi.')));
     return;
   }
 
-  // Streak protéines (gamification douce, SPEC §7).
+  root.append(h('div', { class: 'bilan-head' },
+    h('p', { class: 'day-caption', style: 'margin:2px 2px' }, MODES[mode].caption),
+    parJourDispo
+      ? echelleToggle(mode, (m) => { store.setBilanMode(m); renderBilan(root, data); })
+      : null));
+
+  // Streak protéines (gamification douce, SPEC §7) — hebdo par nature, donc
+  // affiché dans les deux modes.
   const streak = Number(d.streak_prot) || 0;
   root.append(h('div', { class: `bilan-streak ${streak > 0 ? 'is-on' : ''}` },
     h('span', { class: 'bilan-streak__ico' }, streak > 0 ? '🔥' : '💤'),
@@ -92,10 +158,13 @@ export function renderBilan(root, data) {
       ? h('span', {}, h('b', {}, `${streak} semaine${streak > 1 ? 's' : ''}`), ' dans la fenêtre protéines')
       : h('span', {}, 'Fenêtre protéines pas encore tenue sur une semaine complète')));
 
-  const range = `${frDate(semaines[0].debut)} → ${frDate(semaines[semaines.length - 1].fin)}`;
-  root.append(h('p', { class: 'section-hint', style: 'margin:14px 2px 4px' }, `Moyenne journalière · ${range}`));
+  const jours = d.jours || [];
+  const range = mode === 'jour' && jours.length
+    ? `${frDate(jours[0].date)} → ${frDate(jours[jours.length - 1].date)}`
+    : `${frDate(semaines[0].debut)} → ${frDate(semaines[semaines.length - 1].fin)}`;
+  root.append(h('p', { class: 'section-hint', style: 'margin:14px 2px 4px' }, `${MODES[mode].hint} · ${range}`));
 
-  METRICS.forEach((m) => root.append(metricBlock(m, d)));
+  METRICS.forEach((m) => root.append(metricBlock(m, d, mode)));
 
   root.append(h('p', { class: 'bilan-foot' }, 'Lecture seule — l’analyse fine est le travail de la routine hebdo.'));
 }

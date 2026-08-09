@@ -205,7 +205,7 @@ export function openScan(ctx) {
     const protIn = field_('Protéines pour 100 g (g)', fiche ? fiche.prot_100g : '', 'number', null);
     const fibresIn = field_('Fibres pour 100 g (g)',
       fiche && fiche.fibres_100g != null ? fiche.fibres_100g : '', 'number',
-      'Facultatif, souvent absent des étiquettes. Enregistré pour plus tard — aucune jauge ne l\'affiche aujourd\'hui.');
+      'Souvent absent des étiquettes. Laissé vide, ce produit ne comptera pas dans la jauge fibres : la valeur Ciqual vaut mieux qu\'un blanc.');
     const stockIn = field_('Combien de paquets as-tu ?', 1, 'number',
       'À 0, le produit n\'apparaîtra pas dans « Mon stock ».');
 
@@ -283,8 +283,8 @@ export function openScan(ctx) {
         // Le Sheet stocke tout POUR 100 g ; aucune conversion ici.
         kcal_100g: Number(kcalIn.input.value) || 0,
         prot_100g: Number(protIn.input.value) || 0,
-        // Vide (pas 0) si non renseigné : « sans fibres » et « inconnu » doivent
-        // rester distinguables le jour où la jauge fibres arrivera.
+        // Vide (pas 0) si non renseigné : « sans fibres » et « inconnu » restent
+        // distinguables — la jauge fibres additionne sans jamais estimer.
         fibres_100g: fibres === '' ? '' : Number(fibres),
         poids_paquet_g: poids,
         flag_gluten: glutenBox.checked ? 'oui' : 'non',

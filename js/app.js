@@ -45,6 +45,10 @@ function buildModel(state, catalog) {
   const macros100 = (x) => ({
     kcal: Number(x.kcal_100g) || 0,
     prot_g: Number(x.prot_100g) || 0,
+    // null (pas 0) quand la colonne est vide : la jauge fibres additionne ce
+    // qu'elle a et n'invente rien, mais l'écran doit pouvoir afficher « — »
+    // plutôt qu'un « 0 g » qui ferait croire à un aliment sans fibres.
+    fibres_g: (x.fibres_100g === '' || x.fibres_100g == null) ? null : Number(x.fibres_100g),
   });
 
   const foods = (catalog.produits || []).map((pr) => ({
@@ -72,10 +76,21 @@ function buildModel(state, catalog) {
   }
 
   // Presets « repas extérieur » : macros ABSOLUES d'un repas, pas pour 100 g —
-  // il n'y a ni paquet ni poids à peser au restaurant.
+  // il n'y a ni paquet ni poids à peser au restaurant. L'onglet `plats` n'a
+  // qu'un seul jeu de colonnes nutritionnelles : pour un plat de type
+  // `exterieur`, `kcal_100g`/`prot_100g`/`fibres_100g` portent le total du
+  // repas. Lire `pl.kcal` (comme avant le 2026-08-09) donnait des presets à
+  // 0 kcal / 0 g — invisible tant que l'onglet `plats` était vide.
   const exterieurs = plats.filter((pl) => String(pl.type) === 'exterieur').map((pl) => ({
     id: pl.id, nom: pl.nom,
-    macros: { kcal: Number(pl.kcal) || 0, prot_g: Number(pl.prot_g) || 0},
+    macros: {
+      kcal: Number(pl.kcal_100g) || 0,
+      prot_g: Number(pl.prot_100g) || 0,
+      // Pas de curseur fibres au resto (SPEC §1 principe 2) : la seule source
+      // est le preset. Sans valeur, le repas ne creuse pas la jauge par erreur…
+      // il ne la remplit simplement pas.
+      fibres_g: Number(pl.fibres_100g) || 0,
+    },
   }));
 
   return { state, foods, exterieurs };
@@ -455,7 +470,11 @@ function foodByEan(ean) {
   const st = (M && M.state && M.state.stock) || (cs && cs.state && cs.state.stock) || {};
   return {
     id: pr.id, nom: pr.nom, ean: code,
-    macros: { kcal: Number(pr.kcal_100g) || 0, prot_g: Number(pr.prot_100g) || 0 },
+    macros: {
+      kcal: Number(pr.kcal_100g) || 0,
+      prot_g: Number(pr.prot_100g) || 0,
+      fibres_g: (pr.fibres_100g === '' || pr.fibres_100g == null) ? null : Number(pr.fibres_100g),
+    },
     stock: Number(st[pr.id]) || 0,
     // Nécessaire à la feuille de scan pour convertir « N paquets » → grammes.
     paquet: Number(pr.poids_paquet_g) || 0,
@@ -541,6 +560,9 @@ function applyMacros(state, macros = {}, qty = 1, sign = +1) {
   };
   bump(j.prot_g, macros.prot_g);
   bump(j.kcal, macros.kcal);
+  // `bump` fait `add || 0` : un aliment sans donnée de fibres ne bouge rien.
+  // Absent si le backend n'est pas encore redéployé.
+  if (j.fibres_g) bump(j.fibres_g, macros.fibres_g);
 }
 
 /* ------------------------------------------------------------------ */

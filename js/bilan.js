@@ -6,8 +6,12 @@ import { h, clear, num, frDate } from './util.js';
 import { store } from './store.js';
 
 const METRICS = [
-  { key: 'prot_g', label: 'Protéines', unit: 'g',    kind: 'prot' },
-  { key: 'kcal',   label: 'Calories',  unit: 'kcal', kind: 'kcal' },
+  { key: 'prot_g',   label: 'Protéines', unit: 'g',    kind: 'prot' },
+  { key: 'kcal',     label: 'Calories',  unit: 'kcal', kind: 'kcal' },
+  { key: 'fibres_g', label: 'Fibres',    unit: 'g',    kind: 'fibres',
+    // Seul endroit de l'app où il y a la place de le dire : la jauge fibres
+    // minore toujours (skill nutrition §6).
+    note: 'Ne compte que les produits dont les fibres sont renseignées.' },
 ];
 
 const MODES = {
@@ -105,7 +109,8 @@ function metricBlock(metric, data, mode) {
           ? [h('b', {}, num(last.value)), ` ${MODES[mode].unite(metric.unit)} `]
           : h('span', { class: 'bilan-metric__vide' }, 'rien saisi '),
         h('span', { class: 'bilan-metric__cible' }, `· ${cibleTxt}`))),
-    h('div', { html: metricChart(metric, points, cible, tol) }));
+    h('div', { html: metricChart(metric, points, cible, tol) }),
+    metric.note ? h('p', { class: 'bilan-metric__note' }, metric.note) : null);
 }
 
 /** Bascule jour / semaine ; le choix est mémorisé d'une visite à l'autre. */
@@ -164,7 +169,10 @@ export function renderBilan(root, data) {
     : `${frDate(semaines[0].debut)} → ${frDate(semaines[semaines.length - 1].fin)}`;
   root.append(h('p', { class: 'section-hint', style: 'margin:14px 2px 4px' }, `${MODES[mode].hint} · ${range}`));
 
-  METRICS.forEach((m) => root.append(metricBlock(m, d, mode)));
+  // Backend pas encore redéployé : la réponse ne porte pas les fibres. Mieux
+  // vaut ne rien montrer qu'un graphe plat à zéro annoncé « informatif ».
+  const dispo = (m) => m.key !== 'fibres_g' || (d.cibles || {}).fibres_g != null;
+  METRICS.filter(dispo).forEach((m) => root.append(metricBlock(m, d, mode)));
 
   root.append(h('p', { class: 'bilan-foot' }, 'Lecture seule — l’analyse fine est le travail de la routine hebdo.'));
 }

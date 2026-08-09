@@ -1,8 +1,11 @@
 // Feuille « Repas extérieur » : logger un repas mangé dehors (resto, invitation).
 // On part d'un preset resto (léger / normal / copieux — valeurs sourcées du
 // catalogue) puis on ajuste kcal et protéines au curseur.
-// Confirmation → onLog({kcal, prot_g, ref}) : compté dans les jauges du
-// jour, sans toucher au stock (aucun ingrédient consommé).
+// Confirmation → onLog({kcal, prot_g, fibres_g, ref}) : compté dans les jauges
+// du jour, sans toucher au stock (aucun ingrédient consommé).
+// Pas de curseur fibres (SPEC §1 principe 2 : 1 preset + 2 curseurs) — personne
+// ne sait estimer les fibres d'un plat de resto. La valeur vient du preset, et
+// vaut 0 sans preset : la jauge fibres minore, elle n'invente pas.
 import { h, clear, num, thumbOnlySlider } from './util.js';
 
 const KCAL_MAX = 2000;
@@ -24,6 +27,7 @@ export function openExterieur(presets, onLog) {
   let current = list[Math.min(1, list.length - 1)];   // « normal » par défaut si dispo
   let kcal = current.macros.kcal;
   let prot = current.macros.prot_g;
+  const fibresDe = (p) => Number(p.macros.fibres_g) || 0;
 
   const kcalSlider = h('input', { type: 'range', class: 'qty__slider', min: '0', max: String(KCAL_MAX), step: '25', value: String(kcal), 'aria-label': 'Calories du repas' });
   const protSlider = h('input', { type: 'range', class: 'qty__slider', min: '0', max: String(PROT_MAX), step: '1', value: String(prot), 'aria-label': 'Protéines du repas' });
@@ -60,7 +64,7 @@ export function openExterieur(presets, onLog) {
   confirm.addEventListener('click', () => {
     confirm.disabled = true;
     close();
-    onLog({ kcal, prot_g: prot, ref: current.id || '' });
+    onLog({ kcal, prot_g: prot, fibres_g: fibresDe(current), ref: current.id || '' });
   });
 
   const sheet = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true' },

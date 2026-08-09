@@ -1,5 +1,5 @@
 {
-  "_note": "Fixture de DÉMO pour prévisualiser l'UI hors backend (?demo). Valeurs de remplissage, pas des recommandations nutritionnelles.",
+  "_note": "Fixture de DÉMO pour prévisualiser l'UI hors backend (?demo). Valeurs de remplissage, pas des recommandations nutritionnelles. Yaourt grec, Œufs et Fromage blanc n'ont VOLONTAIREMENT pas de fibres_100g : c'est le seul moyen de prévisualiser le cas dégradé (« — » dans le bloc info, aucune puce fibres).",
   "state": {
     "date": "2026-07-08",
     "creneau_courant": "dejeuner",
@@ -13,6 +13,11 @@
         "valeur": 1520,
         "cible": 2850,
         "ratio": 0.53
+      },
+      "fibres_g": {
+        "valeur": 14,
+        "cible": 30,
+        "ratio": 0.47
       }
     },
     "pools": {
@@ -24,7 +29,7 @@
           "macros": {
             "kcal": 400,
             "prot_g": 22,
-            "fer_mg": 2.9
+            "fibres_g": 5.4
           },
           "faisable": true
         }
@@ -37,7 +42,7 @@
           "macros": {
             "kcal": 540,
             "prot_g": 32,
-            "fer_mg": 4.8
+            "fibres_g": 5.7
           },
           "faisable": true
         },
@@ -48,7 +53,7 @@
           "macros": {
             "kcal": 480,
             "prot_g": 24,
-            "fer_mg": 6.2
+            "fibres_g": 7.1
           },
           "faisable": true
         },
@@ -59,7 +64,7 @@
           "macros": {
             "kcal": 520,
             "prot_g": 34,
-            "fer_mg": 3.6
+            "fibres_g": null
           },
           "faisable": false
         }
@@ -103,7 +108,7 @@
         "poids_paquet_g": 200,
         "kcal_100g": 120,
         "prot_100g": 14,
-        "fibres_100g": "",
+        "fibres_100g": 1.2,
         "flag_gluten": "non",
         "flag_lactose": "non",
         "actif": "oui"
@@ -114,7 +119,7 @@
         "poids_paquet_g": 250,
         "kcal_100g": 92,
         "prot_100g": 7.2,
-        "fibres_100g": "",
+        "fibres_100g": 3.5,
         "actif": "oui"
       },
       {
@@ -123,7 +128,7 @@
         "poids_paquet_g": 500,
         "kcal_100g": 300,
         "prot_100g": 10,
-        "fibres_100g": "",
+        "fibres_100g": 10,
         "actif": "oui"
       },
       {
@@ -132,7 +137,7 @@
         "poids_paquet_g": 400,
         "kcal_100g": 130,
         "prot_100g": 8,
-        "fibres_100g": "",
+        "fibres_100g": 7.6,
         "actif": "oui"
       },
       {
@@ -141,7 +146,7 @@
         "poids_paquet_g": 300,
         "kcal_100g": 25,
         "prot_100g": 3,
-        "fibres_100g": "",
+        "fibres_100g": 2.7,
         "actif": "oui"
       },
       {
@@ -150,7 +155,7 @@
         "poids_paquet_g": 1200,
         "kcal_100g": 130,
         "prot_100g": 3,
-        "fibres_100g": "",
+        "fibres_100g": 1.8,
         "actif": "oui"
       },
       {
@@ -168,7 +173,7 @@
         "poids_paquet_g": 200,
         "kcal_100g": 640,
         "prot_100g": 24,
-        "fibres_100g": "",
+        "fibres_100g": 12.5,
         "actif": "oui"
       },
       {
@@ -189,7 +194,7 @@
         "poids_paquet_g": 1000,
         "kcal_100g": 110,
         "prot_100g": 4,
-        "fibres_100g": "",
+        "fibres_100g": 6.5,
         "actif": "oui"
       }
     ],
@@ -201,7 +206,7 @@
         "composition": "[[\"P02\",100],[\"P07\",100],[\"P06\",100]]",
         "kcal_100g": 180,
         "prot_100g": 10.7,
-        "fibres_100g": "",
+        "fibres_100g": 1.9,
         "poids_fournee_g": 300,
         "actif": "oui"
       },
@@ -212,7 +217,7 @@
         "composition": "[[\"P03\",125],[\"P06\",100]]",
         "kcal_100g": 213,
         "prot_100g": 10.7,
-        "fibres_100g": "",
+        "fibres_100g": 3.1,
         "poids_fournee_g": 225,
         "actif": "oui"
       },
@@ -223,32 +228,36 @@
         "composition": "[[\"P05\",100]]",
         "kcal_100g": 510,
         "prot_100g": 27,
-        "fibres_100g": "",
+        "fibres_100g": 7.6,
         "poids_fournee_g": 100,
         "actif": "oui"
       },
       {
+        "_note": "Presets extérieur : l'onglet `plats` n'a qu'un jeu de colonnes nutritionnelles, elles portent ici le TOTAL du repas (pas une valeur /100 g).",
         "id": "S01",
         "nom": "Resto léger",
         "type": "exterieur",
-        "kcal": 550,
-        "prot_g": 20,
+        "kcal_100g": 550,
+        "prot_100g": 20,
+        "fibres_100g": 4,
         "actif": "oui"
       },
       {
         "id": "S02",
         "nom": "Resto normal",
         "type": "exterieur",
-        "kcal": 800,
-        "prot_g": 25,
+        "kcal_100g": 800,
+        "prot_100g": 25,
+        "fibres_100g": 6,
         "actif": "oui"
       },
       {
         "id": "S03",
         "nom": "Resto copieux",
         "type": "exterieur",
-        "kcal": 1100,
-        "prot_g": 35,
+        "kcal_100g": 1100,
+        "prot_100g": 35,
+        "fibres_100g": 8,
         "actif": "oui"
       }
     ]
@@ -337,7 +346,8 @@
       "nom": "Dahl lentilles-épinards",
       "macros": {
         "kcal": 213,
-        "prot_g": 10.7
+        "prot_g": 10.7,
+        "fibres_g": 3.1
       },
       "instructions": "Faire revenir oignon + ail, ajouter les lentilles corail, curcuma et lait de coco, mijoter 20 min. Incorporer les épinards en fin de cuisson. Répartir en 4 portions.",
       "nouveau": false,
@@ -353,7 +363,8 @@
         "type": "batch",
         "macros": {
           "kcal": 180,
-          "prot_g": 10.7
+          "prot_g": 10.7,
+          "fibres_g": 1.9
         },
         "instructions": "Cuire le riz complet. Rôtir le tofu mariné (sauce soja + sésame) et les brocolis 20 min à 200 °C. Assembler en 4 bols.",
         "derniere_realisation": "2026-07-05",
@@ -368,7 +379,8 @@
         "type": "batch",
         "macros": {
           "kcal": 213,
-          "prot_g": 10.7
+          "prot_g": 10.7,
+          "fibres_g": 3.1
         },
         "instructions": "Faire revenir oignon + ail, ajouter les lentilles corail, curcuma et lait de coco, mijoter 20 min. Incorporer les épinards en fin de cuisson.",
         "derniere_realisation": "2026-06-26",
@@ -383,7 +395,8 @@
         "type": "batch",
         "macros": {
           "kcal": 510,
-          "prot_g": 27
+          "prot_g": 27,
+          "fibres_g": 7.6
         },
         "instructions": "Haricots rouges, tomates concassées, maïs, poivrons et épices chili. Mijoter 30 min. Répartir en 5 portions.",
         "derniere_realisation": "",
@@ -402,11 +415,13 @@
   "bilan": {
     "cibles": {
       "kcal": 2850,
-      "prot_g": 110
+      "prot_g": 110,
+      "fibres_g": 30
     },
     "tolerances": {
       "kcal": 200,
-      "prot_g": 10
+      "prot_g": 10,
+      "fibres_g": 5
     },
     "semaines": [
       {
@@ -417,7 +432,8 @@
         "jours_avec_donnees": 7,
         "moyennes": {
           "kcal": 2610,
-          "prot_g": 96
+          "prot_g": 96,
+          "fibres_g": 19.4
         }
       },
       {
@@ -428,7 +444,8 @@
         "jours_avec_donnees": 7,
         "moyennes": {
           "kcal": 2740,
-          "prot_g": 104
+          "prot_g": 104,
+          "fibres_g": 22.8
         }
       },
       {
@@ -439,7 +456,8 @@
         "jours_avec_donnees": 7,
         "moyennes": {
           "kcal": 2880,
-          "prot_g": 112
+          "prot_g": 112,
+          "fibres_g": 26.1
         }
       },
       {
@@ -450,18 +468,19 @@
         "jours_avec_donnees": 3,
         "moyennes": {
           "kcal": 2790,
-          "prot_g": 108
+          "prot_g": 108,
+          "fibres_g": 24.3
         }
       }
     ],
     "jours": [
-      { "date": "2026-07-04", "label": "sam.", "a_donnees": true,  "kcal": 3020, "prot_g": 118 },
-      { "date": "2026-07-05", "label": "dim.", "a_donnees": true,  "kcal": 2640, "prot_g": 101 },
-      { "date": "2026-07-06", "label": "lun.", "a_donnees": true,  "kcal": 2900, "prot_g": 115 },
-      { "date": "2026-07-07", "label": "mar.", "a_donnees": true,  "kcal": 2870, "prot_g": 109 },
-      { "date": "2026-07-08", "label": "mer.", "a_donnees": true,  "kcal": 2650, "prot_g": 102 },
-      { "date": "2026-07-09", "label": "jeu.", "a_donnees": true,  "kcal": 2910, "prot_g": 114 },
-      { "date": "2026-07-10", "label": "Auj.", "a_donnees": true,  "kcal": 2810, "prot_g": 108 }
+      { "date": "2026-07-04", "label": "sam.", "a_donnees": true,  "kcal": 3020, "prot_g": 118, "fibres_g": 27.4 },
+      { "date": "2026-07-05", "label": "dim.", "a_donnees": true,  "kcal": 2640, "prot_g": 101, "fibres_g": 18.9 },
+      { "date": "2026-07-06", "label": "lun.", "a_donnees": true,  "kcal": 2900, "prot_g": 115, "fibres_g": 25.2 },
+      { "date": "2026-07-07", "label": "mar.", "a_donnees": true,  "kcal": 2870, "prot_g": 109, "fibres_g": 22.6 },
+      { "date": "2026-07-08", "label": "mer.", "a_donnees": true,  "kcal": 2650, "prot_g": 102, "fibres_g": 16.8 },
+      { "date": "2026-07-09", "label": "jeu.", "a_donnees": true,  "kcal": 2910, "prot_g": 114, "fibres_g": 29.7 },
+      { "date": "2026-07-10", "label": "Auj.", "a_donnees": true,  "kcal": 2810, "prot_g": 108, "fibres_g": 24.1 }
     ],
     "streak_prot": 3
   }

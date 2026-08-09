@@ -544,9 +544,9 @@ function logPlat_(p, now) {
 
 /**
  * Log d'un aliment brut consommé (modèle produit-centrique) : quantité en
- * PORTIONS (fractions acceptées, saisies au curseur côté PWA). Journalise et
- * décrémente le stock du produit. Ses macros par portion comptent dans les
- * jauges du jour (voir getState_).
+ * GRAMMES (fractions acceptées, dérivées du curseur côté PWA). Journalise et
+ * décrémente le stock du produit. Ses macros — pour 100 g, donc mises à
+ * l'échelle par quantite/100 — comptent dans les jauges du jour (getState_).
  */
 function logProduit_(p, now) {
   if (!p.ref) throw new Error('ref (produit_id) requis.');

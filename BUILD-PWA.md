@@ -1,8 +1,25 @@
-# Enthalpie — Brief de build PWA (Phase 4)
+# Enthalpie — Brief de build PWA (Phase 4) — 📦 ARCHIVE
 
-> À ouvrir dans la session **Claude Code**, repo `blushifting/enthalpie`, déploiement **GitHub Pages**.
-> Le backend (Google Sheet + Apps Script) est déjà déployé et testé. Ce doc est le contrat complet ;
-> la spec de référence reste `SPEC.md` (§4 écrans, §5 moteur, §6 courses, §7 gamification).
+> ## ⚠️ Document historique — ne plus s'y fier
+>
+> Ce brief a servi à construire la PWA. **Le build est livré depuis le 2026-07-14**
+> (en ligne sur `blushifting.github.io/enthalpie`) et le modèle de données a été **refondu le
+> 2026-08-08** : le gramme est devenu l'unité unique, les valeurs sont pour 100 g, les portions
+> et le fer ont disparu. Tout ce qui suit décrit donc un état **périmé** — jauge fer,
+> `stock{ref:portions}`, `unite_de_vente`, clôture médiane, endpoints « à ajouter ».
+>
+> Conservé uniquement comme trace de l'intention de build. **Références à jour :**
+>
+> | Besoin | Où regarder |
+> |---|---|
+> | Contrat d'API, schéma des onglets, redéploiement | `Enthalpie/backend-doc/README.md` (OneDrive) |
+> | Écrans, moteur, modèle de données | `Enthalpie/SPEC.md` (OneDrive), révisée le 2026-08-09 |
+> | Vérité absolue | le code : `backend/Code.gs` et `pwa/js/` |
+
+---
+
+<details>
+<summary>Contenu d'origine (juillet 2026)</summary>
 
 ## 0. Contexte en une ligne
 
@@ -93,3 +110,5 @@ bloquant pour un premier écran « Aujourd'hui ».
 6. Scan (+ endpoints `add_produit`).
 7. Écrans Cuisine et Bilan.
 8. Déploiement GitHub Pages + manifest PWA (installable).
+
+</details>

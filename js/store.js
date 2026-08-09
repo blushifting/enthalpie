@@ -46,6 +46,10 @@ export const store = {
   },
   getCachedBilan() { return readJSON(KEY.bilan, null); },
 
+  // --- Échelle de l'écran Bilan (jour | semaine), retenue entre deux visites ---
+  getBilanMode() { return read(KEY.bilanMode) === 'jour' ? 'jour' : 'semaine'; },
+  setBilanMode(m) { write(KEY.bilanMode, m === 'jour' ? 'jour' : 'semaine'); },
+
   // --- Ajouts manuels de courses (texte libre, locaux, hors compteurs) ---
   getCoursesManual() { return readJSON(KEY.manual, []); },
   addCoursesManual(texte) {

@@ -46,11 +46,17 @@ function gauge({ kind, label, unit, valeur, cible, ratio }) {
 }
 
 function gaugesRow(jauges) {
+  // La jauge fibres est absente tant que le backend n'a pas été redéployé : on
+  // ne la rend que si elle arrive, sinon l'app plante à froid entre les deux
+  // déploiements (même garde-fou que `jours` dans bilan.js).
+  const fib = jauges.fibres_g;
   return h('section', { class: 'gauges', 'aria-label': 'Apports du jour' },
     gauge({ kind: 'prot', label: 'Protéines', unit: 'g',
       valeur: jauges.prot_g.valeur, cible: jauges.prot_g.cible, ratio: jauges.prot_g.ratio }),
     gauge({ kind: 'kcal', label: 'Calories', unit: 'kcal',
       valeur: jauges.kcal.valeur, cible: jauges.kcal.cible, ratio: jauges.kcal.ratio }),
+    fib ? gauge({ kind: 'fibres', label: 'Fibres', unit: 'g',
+      valeur: fib.valeur, cible: fib.cible, ratio: fib.ratio }) : null,
   );
 }
 
@@ -93,10 +99,15 @@ function infoBlock(food, meta) {
     : `paquet de ${num(meta.paquet)} g · il en reste ${100 - meta.pct} %`
       + (meta.reserve > 0 ? ` · ${num(Math.round(meta.reserve / meta.paquet))} paquet(s) d'avance` : '');
 
+  // Le tiret des fibres EST l'information utile : il montre au coup d'œil quels
+  // produits creusent la jauge sans qu'on le sache (skill nutrition §6). Le
+  // remède est de renseigner la valeur depuis Ciqual, pas de l'estimer.
+  const fibres = m.fibres_g == null ? '— fibres' : `${num(m.fibres_g)} g fibres`;
+
   return h('div', { class: 'inv-row__info' },
     h('div', { class: 'inv-row__info-line' }, etat),
     h('div', { class: 'inv-row__info-line' },
-      `${num(m.kcal)} kcal · ${num(m.prot_g)} g prot / 100 g`),
+      `${num(m.kcal)} kcal · ${num(m.prot_g)} g prot · ${fibres} / 100 g`),
   );
 }
 

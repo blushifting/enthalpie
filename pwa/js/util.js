@@ -115,6 +115,9 @@ export function macroChips(m = {}) {
   const chips = [];
   if (m.prot_g != null) chips.push(['prot', `${num(m.prot_g)} g`]);
   if (m.kcal != null)   chips.push(['kcal', `${num(m.kcal)}`]);
+  // Pas de puce quand la donnée manque : ne rien afficher est plus honnête
+  // qu'un « 0 g » (l'étiquetage des fibres est facultatif).
+  if (m.fibres_g != null) chips.push(['fibres', `${num(m.fibres_g)} g`]);
   return chips;
 }
 

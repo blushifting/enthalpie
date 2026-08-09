@@ -13,8 +13,14 @@ Refonte du **2026-08-08** — à ne jamais reperdre :
   **Aucune conversion nulle part** (`scan.js` n'en fait plus).
 - **Plus de portions.** L'app raisonne en pourcentage d'un paquet dont on connaît le poids
   (`poids_paquet_g`) — c'est le pivot du curseur de l'écran Aujourd'hui.
-- **Plus de fer.** `fibres_100g` a pris sa place : collectée, mais sans jauge.
-  Vide ≠ 0 (« on ne sait pas » vs « sans fibres »).
+- **Plus de fer.** `fibres_100g` a pris sa place et porte **sa propre jauge depuis le 2026-08-09**
+  (cible 30 g/j, colonne `objectifs.fibres_g_jour`). Vide ≠ 0 (« on ne sait pas » vs « sans
+  fibres ») : ce `null` se propage jusqu'à l'écran, qui affiche « — fibres ».
+  **La jauge sous-compte par construction** : elle additionne les aliments documentés et n'estime
+  jamais les autres (skill nutrition §6). Ne pas « boucher les trous » — les renseigner depuis
+  Ciqual, produit par produit. Et **ne pas en faire un axe de score** dans `engine.js` : pondérer
+  une donnée absente d'un aliment sur trois pénalise les produits mal documentés, ce qui est
+  exactement l'erreur qui avait coûté sa place au fer.
 - **Plus de clôture médiane** ni de ligne `médian` : elle inventait une consommation *et* puisait
   dans le stock. Un jour sans saisie ne génère rien.
 
@@ -54,6 +60,11 @@ déploiement** — l'URL changerait et la PWA pointerait dans le vide. Si `SCHEM
 `setup()` une fois dans l'éditeur Apps Script.
 
 Prérequis non versionnés : `backend/.clasp.json` et `backend/.deployment-id`.
+
+**Ordre : backend d'abord, PWA ensuite.** Le front rend conditionnellement ce que le backend
+pourrait ne pas encore renvoyer (jauge fibres, `jours[]` du bilan) ; l'ordre inverse afficherait une
+version dégradée le temps du décalage. Et **bumper `CACHE` dans `pwa/sw.js`** à chaque release,
+sinon l'ancien app-shell reste servi et la modif n'apparaît pas — le piège classique de ce projet.
 
 **Piège curl** : ne jamais mettre `-X POST` pour appeler l'API. Apps Script répond 302 ; avec
 `-X POST` curl re-POSTe sur la cible et reçoit une page HTML d'erreur **alors que l'écriture a eu

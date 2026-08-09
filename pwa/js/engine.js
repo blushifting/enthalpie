@@ -9,6 +9,11 @@
 // rarement pour qu'un score le distingue, et il n'avait pas de cible chiffrée.
 // Signaux différés (enrichissement backend) : fraîcheur de rotation, périssabilité.
 
+// Les FIBRES ont une jauge (2026-08-09) mais volontairement AUCUN poids ici :
+//  1. `fibres_100g` manque sur environ un aliment sur trois. Pondérer reviendrait
+//     à pénaliser les produits mal documentés, pas les produits pauvres en fibres.
+//  2. C'est exactement l'erreur qui avait tué le fer comme axe de score.
+// À revisiter si la couverture du catalogue devient correcte.
 const W = { prot: 1.0, kcal: 0.6 };
 
 function context(state) {

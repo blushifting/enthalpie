@@ -11,7 +11,7 @@
  *   GET  ?token=…&action=catalog        → produits + plats actifs
  *   GET  ?token=…&action=courses        → liste de courses (par magasin/rayon)
  *   GET  ?token=…&action=cuisine        → recette de la semaine + biblio batch + compteurs
- *   GET  ?token=…&action=bilan          → prot/kcal vs cibles : 7 derniers jours + 4 sem.
+ *   GET  ?token=…&action=bilan          → prot/kcal/fibres vs cibles : 7 derniers jours + 4 sem.
  *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement | exterieur
  *
  * Conforme à SPEC.md §3 (modèle de données) et §5-6 (moteur / liste).
@@ -46,9 +46,13 @@ var SCHEMA = {
   stock: [
     'ref', 'grammes'
   ],
+  // ⚠️ Colonnes ajoutées EN FIN DE LISTE, impérativement : setup() réécrit la
+  // ligne d'en-tête sans toucher aux lignes de données. Une insertion au milieu
+  // décalerait les en-têtes par rapport aux valeurs déjà saisies.
   objectifs: [
     'kcal_jour', 'prot_g_jour', 'tol_kcal', 'tol_prot',
-    'mode_strict_gluten', 'mode_strict_lactose'
+    'mode_strict_gluten', 'mode_strict_lactose',
+    'fibres_g_jour', 'tol_fibres'          // ajout 2026-08-09 (skill nutrition §6)
   ],
   parametres: [
     'cle', 'valeur'
@@ -95,9 +99,10 @@ function seedDefaults_() {
   if (obj.length === 0) {
     // Cibles issues de skill-nutrition/SKILL.md :
     //  - protéines 110 g/j (1,7 g/kg)  - calories 2850 kcal/j (point de départ, à calibrer)
+    //  - fibres 30 g/j (fenêtre 25–35 g)
     appendRow_('objectifs', {
-      kcal_jour: 2850, prot_g_jour: 110,
-      tol_kcal: 200, tol_prot: 10,
+      kcal_jour: 2850, prot_g_jour: 110, fibres_g_jour: 30,
+      tol_kcal: 200, tol_prot: 10, tol_fibres: 5,
       mode_strict_gluten: 'off', mode_strict_lactose: 'off'
     });
   }
@@ -233,7 +238,7 @@ function getState_() {
   var stock = stockMap_();
 
   // Consommation du jour à partir du log (plats ET produits bruts loggués au curseur)
-  var conso = { kcal: 0, prot_g: 0 };
+  var conso = { kcal: 0, prot_g: 0, fibres_g: 0 };
   readTable_('log').forEach(function (l) {
     if (formatTs_(l.timestamp, tz) !== today) return;
     // Les macros de plats/produits sont POUR 100 g et la quantité loguée est en
@@ -245,12 +250,17 @@ function getState_() {
     else if (l.type === 'exterieur') { m = parseExtra_(l.extra); f = 1; }
     else return;
     conso.kcal += m.kcal * f; conso.prot_g += m.prot_g * f;
+    // `|| 0` assumé : un aliment sans donnée de fibres ne compte pas. C'est le
+    // sous-comptage documenté au skill nutrition §6 — la jauge fibres minore
+    // toujours, elle ne majore jamais.
+    conso.fibres_g += (m.fibres_g || 0) * f;
   });
 
   var obj = objectifs_();
   var jauges = {
-    prot_g: gauge_(conso.prot_g, obj.prot_g_jour),
-    kcal:   gauge_(conso.kcal, obj.kcal_jour)
+    prot_g:   gauge_(conso.prot_g, obj.prot_g_jour),
+    kcal:     gauge_(conso.kcal, obj.kcal_jour),
+    fibres_g: gauge_(conso.fibres_g, obj.fibres_g_jour)
   };
 
   // Pools par créneau : plats actifs, marqués faisables ou non selon le stock
@@ -438,8 +448,9 @@ function intakeParJour_(tz) {
     else if (l.type === 'exterieur') { m = parseExtra_(l.extra); f = 1; }
     else return;
     var day = formatTs_(l.timestamp, tz);
-    var b = parJour[day] || (parJour[day] = { kcal: 0, prot_g: 0 });
+    var b = parJour[day] || (parJour[day] = { kcal: 0, prot_g: 0, fibres_g: 0 });
     b.kcal += m.kcal * f; b.prot_g += m.prot_g * f;
+    b.fibres_g += (m.fibres_g || 0) * f;      // même sous-comptage que getState_
   });
   return parJour;
 }
@@ -461,14 +472,18 @@ function moyennesHebdo_(tz, nb, parJour) {
   for (var w = nb - 1; w >= 0; w--) {
     var fin = new Date(today.getTime() - w * JOURS * 86400000);
     var debut = new Date(fin.getTime() - (JOURS - 1) * 86400000);
-    var somme = { kcal: 0, prot_g: 0 };
+    var somme = { kcal: 0, prot_g: 0, fibres_g: 0 };
     var joursEcoules = 0, joursAvecDonnees = 0;
     for (var d = 0; d < JOURS; d++) {
       var jour = new Date(debut.getTime() + d * 86400000);
       if (jour.getTime() > today.getTime()) break;   // futur (semaine courante partielle)
       joursEcoules++;
       var b = parJour[Utilities.formatDate(jour, tz, 'yyyy-MM-dd')];
-      if (b) { somme.kcal += b.kcal; somme.prot_g += b.prot_g; joursAvecDonnees++; }
+      if (b) {
+        somme.kcal += b.kcal; somme.prot_g += b.prot_g;
+        somme.fibres_g += (b.fibres_g || 0);
+        joursAvecDonnees++;
+      }
     }
     var denom = joursEcoules || 1;
     semaines.push({
@@ -479,13 +494,18 @@ function moyennesHebdo_(tz, nb, parJour) {
       jours_avec_donnees: joursAvecDonnees,
       moyennes: {
         kcal: round1_(somme.kcal / denom),
-        prot_g: round1_(somme.prot_g / denom)
+        prot_g: round1_(somme.prot_g / denom),
+        fibres_g: round1_(somme.fibres_g / denom)
       }
     });
   }
 
   var cibleProt = Number(obj.prot_g_jour) || 0;
   var tolProt = Number(obj.tol_prot) || 0;
+  // Le streak reste sur les PROTÉINES seules (SPEC §7 : gamification minimale).
+  // L'étendre aux fibres reviendrait à faire un compteur de régularité sur un
+  // indicateur qui sous-compte structurellement — générateur de culpabilité
+  // injustifiée (skill nutrition §6).
   var streak = 0;
   if (cibleProt > 0) {
     for (var i = semaines.length - 1; i >= 0; i--) {
@@ -495,8 +515,16 @@ function moyennesHebdo_(tz, nb, parJour) {
   }
 
   return {
-    cibles: { kcal: Number(obj.kcal_jour) || 0, prot_g: cibleProt },
-    tolerances: { kcal: Number(obj.tol_kcal) || 0, prot_g: tolProt },
+    cibles: {
+      kcal: Number(obj.kcal_jour) || 0,
+      prot_g: cibleProt,
+      fibres_g: Number(obj.fibres_g_jour) || 0
+    },
+    tolerances: {
+      kcal: Number(obj.tol_kcal) || 0,
+      prot_g: tolProt,
+      fibres_g: Number(obj.tol_fibres) || 0
+    },
     semaines: semaines,
     streak_prot: streak
   };
@@ -527,7 +555,8 @@ function joursRecents_(tz, nb, parJour) {
       label: d === 0 ? 'Auj.' : JOURS_FR_[jour.getDay()],
       a_donnees: !!b,
       kcal: round1_(b ? b.kcal : 0),
-      prot_g: round1_(b ? b.prot_g : 0)
+      prot_g: round1_(b ? b.prot_g : 0),
+      fibres_g: round1_(b ? b.fibres_g : 0)
     });
   }
   return jours;
@@ -743,6 +772,8 @@ function publicProduit_(pr) {
     id: pr.id, nom: pr.nom,
     kcal_100g: Number(pr.kcal_100g) || 0,
     prot_100g: Number(pr.prot_100g) || 0,
+    // Chaîne vide conservée telle quelle : « on ne sait pas » ≠ 0 (skill §6).
+    fibres_100g: (pr.fibres_100g === '' || pr.fibres_100g == null) ? '' : Number(pr.fibres_100g),
     poids_paquet_g: Number(pr.poids_paquet_g) || 0,
     ean: String(pr.ean || ''), actif: pr.actif
   };
@@ -765,7 +796,13 @@ function ajustement_(p, now) {
  * sont stockées dans la colonne `extra` du log pour être relues par state/bilan.
  */
 function exterieur_(p, now) {
-  var macros = { kcal: Number(p.kcal) || 0, prot_g: Number(p.prot_g) || 0 };
+  // Pas de curseur fibres dans la PWA (SPEC §1 principe 2 : 1 preset + 2
+  // curseurs) : la valeur vient du preset resto choisi, et vaut 0 sans preset.
+  var macros = {
+    kcal: Number(p.kcal) || 0,
+    prot_g: Number(p.prot_g) || 0,
+    fibres_g: Number(p.fibres_g) || 0
+  };
   appendRow_('log', {
     timestamp: now, type: 'exterieur', ref: p.ref || '', quantite: 1,
     source: p.source || 'tap', extra: JSON.stringify(macros)
@@ -773,13 +810,19 @@ function exterieur_(p, now) {
   return { exterieur: macros, ref: p.ref || '' };
 }
 
-/** Parse la colonne `extra` d'un log (JSON de macros) → {kcal,prot_g}. */
+/** Parse la colonne `extra` d'un log (JSON de macros) → {kcal,prot_g,fibres_g}. */
 function parseExtra_(extra) {
-  if (!extra) return { kcal: 0, prot_g: 0 };
+  var vide = { kcal: 0, prot_g: 0, fibres_g: 0 };
+  if (!extra) return vide;
   try {
     var o = typeof extra === 'string' ? JSON.parse(extra) : extra;
-    return { kcal: Number(o.kcal) || 0, prot_g: Number(o.prot_g) || 0 };
-  } catch (e) { return { kcal: 0, prot_g: 0 }; }
+    return {
+      kcal: Number(o.kcal) || 0,
+      prot_g: Number(o.prot_g) || 0,
+      // Les repas extérieurs d'avant le 2026-08-09 n'ont pas ce champ : 0.
+      fibres_g: Number(o.fibres_g) || 0
+    };
+  } catch (e) { return vide; }
 }
 
 /* ===================================================================== */
@@ -864,27 +907,37 @@ function composition_(pl) {
  */
 function macrosOf_(platId, platsById) {
   var pl = platsById[platId];
-  if (!pl) return { kcal: 0, prot_g: 0 };
+  if (!pl) return { kcal: 0, prot_g: 0, fibres_g: null };
   if (pl.kcal_100g !== '' && pl.kcal_100g != null) {
     return {
       kcal: Number(pl.kcal_100g) || 0,
-      prot_g: Number(pl.prot_100g) || 0
+      prot_g: Number(pl.prot_100g) || 0,
+      fibres_g: fibresOu_(pl.fibres_100g)
     };
   }
   var produitsById = indexBy_(readTable_('produits'), 'id');
-  var tot = { kcal: 0, prot_g: 0 };
+  var tot = { kcal: 0, prot_g: 0, fibres_g: 0 };
   var poids = 0;
+  var avecFibres = 0;                     // ingrédients qui portent réellement la donnée
   composition_(pl).forEach(function (c) {
     var pr = produitsById[c.produit_id];
     if (!pr) return;
     var r = c.grammes / 100;
     tot.kcal += (Number(pr.kcal_100g) || 0) * r;
     tot.prot_g += (Number(pr.prot_100g) || 0) * r;
+    var fib = fibresOu_(pr.fibres_100g);
+    if (fib != null) { tot.fibres_g += fib * r; avecFibres++; }
     poids += c.grammes;
   });
-  if (!(poids > 0)) return { kcal: 0, prot_g: 0 };
+  if (!(poids > 0)) return { kcal: 0, prot_g: 0, fibres_g: null };
   var k = 100 / poids;
-  return { kcal: tot.kcal * k, prot_g: tot.prot_g * k };
+  // On additionne ce qu'on a : un plat n'est « sans donnée » que si AUCUN de ses
+  // ingrédients n'en porte (décision 2026-08-09, skill nutrition §6).
+  return {
+    kcal: tot.kcal * k,
+    prot_g: tot.prot_g * k,
+    fibres_g: avecFibres > 0 ? tot.fibres_g * k : null
+  };
 }
 
 /** Poids total d'une fournée = somme des ingrédients de la composition (g). */
@@ -897,11 +950,21 @@ function poidsFournee_(pl) {
 /** Macros POUR 100 g d'un produit brut. Multiplier par grammes/100 pour l'apport. */
 function macrosProduit_(produitId, produitsById) {
   var pr = produitsById[produitId];
-  if (!pr) return { kcal: 0, prot_g: 0 };
+  if (!pr) return { kcal: 0, prot_g: 0, fibres_g: null };
   return {
     kcal: Number(pr.kcal_100g) || 0,
-    prot_g: Number(pr.prot_100g) || 0
+    prot_g: Number(pr.prot_100g) || 0,
+    // null, PAS 0 : « on ne sait pas » doit rester distinct de « sans fibres »
+    // (l'étiquetage des fibres est facultatif, ~1 fiche OFF sur 3 est muette).
+    // C'est le seul filet qui permettra un jour de mesurer la couverture, la
+    // décision étant de ne rien boucher (skill nutrition §6).
+    fibres_g: fibresOu_(pr.fibres_100g)
   };
+}
+
+/** Colonne fibres → nombre, ou null si la cellule est vide (donnée absente). */
+function fibresOu_(v) {
+  return (v === '' || v == null) ? null : (Number(v) || 0);
 }
 
 function platFaisable_(pl, stock) {
@@ -1018,6 +1081,37 @@ function desinstallerTriggers() {
 }
 
 function clotureMedianeAuto_() { /* retiré — voir desinstallerTriggers() */ }
+
+/* ===================================================================== */
+/* 11bis. MIGRATION « CIBLE FIBRES » (2026-08-09)                         */
+/* ===================================================================== */
+
+/**
+ * Inscrit la cible fibres dans un onglet `objectifs` DÉJÀ rempli.
+ * À exécuter UNE FOIS depuis l'éditeur, après avoir collé cette version.
+ *
+ * seedDefaults_ ne sert que pour un Sheet neuf : il ne fait rien dès qu'une
+ * ligne existe. setup(), lui, réécrit les en-têtes mais laisse les cellules de
+ * données vides. Sans cette migration, `fibres_g_jour` vaut '' → la cible
+ * tombe à 0 → gauge_ renvoie ratio null → la PWA affiche la jauge en mode
+ * « informatif ». Panne silencieuse : c'est la première chose à vérifier si la
+ * jauge fibres ne se colore pas.
+ *
+ * Valeurs : skill-nutrition/SKILL.md §6 et §12 (30 g/j, tolérance ±5 g).
+ */
+function migrerFibres() {
+  setup();                                    // écrit les 2 nouvelles en-têtes
+  var sh = sheet_('objectifs');
+  var headers = sh.getRange(1, 1, 1, SCHEMA.objectifs.length).getValues()[0];
+  var cF = headers.indexOf('fibres_g_jour') + 1;
+  var cT = headers.indexOf('tol_fibres') + 1;
+  if (!cF || !cT) throw new Error('En-têtes fibres absentes — setup() a échoué ?');
+  if (!sh.getRange(2, cF).getValue()) sh.getRange(2, cF).setValue(30);
+  if (!sh.getRange(2, cT).getValue()) sh.getRange(2, cT).setValue(5);
+  var obj = objectifs_();
+  Logger.log('Cible fibres : ' + obj.fibres_g_jour + ' g/j (±' + obj.tol_fibres + ')');
+  return { fibres_g_jour: obj.fibres_g_jour, tol_fibres: obj.tol_fibres };
+}
 
 /* ===================================================================== */
 /* 12. MIGRATION « PORTIONS → GRAMMES » (2026-08-08)                      */

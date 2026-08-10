@@ -2,13 +2,16 @@
 // choix — les 7 derniers jours (un point par jour) ou 4 semaines glissantes
 // (moyenne journalière) — + streak protéines (SPEC §4.4, §7).
 // Graphiques SVG maison, zéro dépendance.
-import { h, clear, num, frDate } from './util.js';
+import { h, clear, num, numEntier, frDate } from './util.js';
+import { REPLI_CIBLES, REPLI_TOLERANCES } from './config.js';
 import { store } from './store.js';
 
+// `fmt` : même règle d'affichage que les jauges du jour — les calories n'ont
+// aucune précision à la décimale, les fibres si.
 const METRICS = [
-  { key: 'prot_g',   label: 'Protéines', unit: 'g',    kind: 'prot' },
-  { key: 'kcal',     label: 'Calories',  unit: 'kcal', kind: 'kcal' },
-  { key: 'fibres_g', label: 'Fibres',    unit: 'g',    kind: 'fibres',
+  { key: 'prot_g',   label: 'Protéines', unit: 'g',    kind: 'prot', fmt: num },
+  { key: 'kcal',     label: 'Calories',  unit: 'kcal', kind: 'kcal', fmt: numEntier },
+  { key: 'fibres_g', label: 'Fibres',    unit: 'g',    kind: 'fibres', fmt: num,
     // Seul endroit de l'app où il y a la place de le dire : la jauge fibres
     // minore toujours (skill nutrition §6).
     note: 'Ne compte que les produits dont les fibres sont renseignées.' },
@@ -75,7 +78,7 @@ function metricChart(metric, points, cible, tol) {
     const bh = Math.max(0, base - yv);
     const cls = `mc-bar mc-bar--${metric.kind}${inWindow(p.value) ? '' : ' is-under'}${i === points.length - 1 ? ' is-current' : ''}`;
     return `<rect x="${x.toFixed(1)}" y="${yv.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="5" class="${cls}"></rect>`
-      + `<text x="${(x + bw / 2).toFixed(1)}" y="${(yv - 5).toFixed(1)}" class="mc-val" text-anchor="middle">${num(p.value)}</text>`;
+      + `<text x="${(x + bw / 2).toFixed(1)}" y="${(yv - 5).toFixed(1)}" class="mc-val" text-anchor="middle">${metric.fmt(p.value)}</text>`;
   }).join('');
 
   const labels = points.map((p, i) => {
@@ -96,17 +99,20 @@ function metricChart(metric, points, cible, tol) {
 
 function metricBlock(metric, data, mode) {
   const points = serie(mode, data, metric.key);
-  const cible = Number((data.cibles || {})[metric.key]) || 0;
-  const tol = Number((data.tolerances || {})[metric.key]) || 0;
+  // Repli sur la cible du projet quand le backend n'en renvoie pas : même règle
+  // que les jauges du jour (cf. REPLI_CIBLES), sinon le graphe fibres perdrait
+  // sa ligne de cible et s'annoncerait « informatif ».
+  const cible = Number((data.cibles || {})[metric.key]) || REPLI_CIBLES[metric.key] || 0;
+  const tol = Number((data.tolerances || {})[metric.key]) || REPLI_TOLERANCES[metric.key] || 0;
   const last = points.length ? points[points.length - 1] : null;
-  const cibleTxt = cible > 0 ? `cible ${num(cible)} ${metric.unit}/j` : 'informatif';
+  const cibleTxt = cible > 0 ? `cible ${metric.fmt(cible)} ${metric.unit}/j` : 'informatif';
 
   return h('section', { class: `bilan-metric bilan-metric--${metric.kind}` },
     h('div', { class: 'bilan-metric__head' },
       h('span', { class: 'bilan-metric__label' }, metric.label),
       h('span', { class: 'bilan-metric__now' },
         last && !last.vide
-          ? [h('b', {}, num(last.value)), ` ${MODES[mode].unite(metric.unit)} `]
+          ? [h('b', {}, metric.fmt(last.value)), ` ${MODES[mode].unite(metric.unit)} `]
           : h('span', { class: 'bilan-metric__vide' }, 'rien saisi '),
         h('span', { class: 'bilan-metric__cible' }, `· ${cibleTxt}`))),
     h('div', { html: metricChart(metric, points, cible, tol) }),

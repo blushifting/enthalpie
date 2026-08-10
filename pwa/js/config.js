@@ -4,6 +4,20 @@
 export const DEFAULT_API_BASE =
   'https://script.google.com/macros/s/AKfycbykJsqIOSd40mhD9YNOHg42rEhgg_Bzf_EAdMJnEaaiD1C9P29Ukg4x44mUcW00SBSN/exec';
 
+// Cibles nutritionnelles de repli (skill nutrition §6, figées le 2026-08-09).
+//
+// Le backend est la source de vérité — ces valeurs ne servent QUE si la réponse
+// arrive sans cible chiffrée (`cible: 0` → `ratio: null`), ce qui suffisait
+// jusqu'ici à faire basculer la jauge fibres en « informatif ». Une jauge dure
+// ne doit pas dépendre du fait qu'une colonne du Sheet soit remplie : la cible
+// est une décision du projet, pas une donnée d'exploitation.
+export const REPLI_CIBLES = {
+  fibres_g: 30,          // 30 g/j, fenêtre 25–35 g
+};
+export const REPLI_TOLERANCES = {
+  fibres_g: 5,           // ±5 g
+};
+
 // Clés localStorage.
 export const KEY = {
   token:   'enthalpie.token',

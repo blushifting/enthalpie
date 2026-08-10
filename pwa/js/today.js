@@ -4,15 +4,30 @@
 // validation : on la fait avancer au fil de la semaine, et la reculer corrige
 // une saisie erronée (remise au stock). Un seul bouton « Valider ».
 // Tout est en grammes ; les macros du catalogue sont pour 100 g.
-import { h, clear, num, thumbOnlySlider } from './util.js';
+import { h, clear, num, numEntier, thumbOnlySlider } from './util.js';
+import { REPLI_CIBLES } from './config.js';
 import { rank } from './engine.js';
 import { openExterieur } from './exterieur.js';
 
 const R = 42;
 const C = 2 * Math.PI * R;
 
+/**
+ * Positions atteignables du curseur d'inventaire, en % du paquet : la grille
+ * des 5 % plus les sixièmes, arrondis à l'entier (17 / 33 / 67 / 83 — un tiers
+ * de point d'écart avec la fraction exacte, soit ~1 g sur un paquet de 500 g,
+ * là où une décimale afficherait une précision qu'on n'a pas). Le 1/2, le 1/4,
+ * le 3/4 et les cinquièmes tombent déjà sur la grille des 5 %.
+ *
+ * 25 crans : assez pour dire ce qu'on a mangé, assez peu pour que chaque cran
+ * soit large au doigt. Les valeurs interdites sont interdites au geste comme au
+ * clavier (cf. thumbOnlySlider).
+ */
+const CRANS_PAQUET = [0, 5, 10, 15, 17, 20, 25, 30, 33, 35, 40, 45, 50,
+  55, 60, 65, 67, 70, 75, 80, 83, 85, 90, 95, 100];
+
 /* ---------- Jauges (apports du jour) ---------- */
-function gauge({ kind, label, unit, valeur, cible, ratio }) {
+function gauge({ kind, label, unit, valeur, cible, ratio, fmt = num }) {
   const isInfo = ratio == null;                     // réservé : jauge sans cible chiffrée
   const over = !isInfo && valeur > cible && cible > 0;
   const clamped = isInfo ? 0 : Math.max(0, Math.min(1, ratio || 0));
@@ -30,14 +45,14 @@ function gauge({ kind, label, unit, valeur, cible, ratio }) {
   const badge = isInfo
     ? h('span', { class: 'gauge__badge' }, 'informatif')
     : h('span', { class: `gauge__badge ${over ? 'is-over' : pct >= 90 ? 'is-ok' : ''}` },
-        over ? `+${num(valeur - cible)} ${unit}` : `${pct} %`);
+        over ? `+${fmt(valeur - cible)} ${unit}` : `${pct} %`);
 
   return h('div', { class: `gauge gauge--${kind}` },
     h('div', { class: 'gauge__ring' },
       h('div', { html: svg }),
       h('div', { class: 'gauge__center' },
-        h('span', { class: 'gauge__value' }, num(valeur)),
-        h('span', { class: 'gauge__target' }, isInfo ? unit : `/ ${num(cible)} ${unit}`),
+        h('span', { class: 'gauge__value' }, fmt(valeur)),
+        h('span', { class: 'gauge__target' }, isInfo ? unit : `/ ${fmt(cible)} ${unit}`),
       ),
     ),
     h('div', { class: 'gauge__label' }, label),
@@ -45,18 +60,32 @@ function gauge({ kind, label, unit, valeur, cible, ratio }) {
   );
 }
 
+/**
+ * Applique la cible de repli quand le backend n'en renvoie pas (`cible: 0` →
+ * `ratio: null`, ce qui affichait la jauge en « informatif »). Une cible du
+ * projet ne dépend pas de l'état d'une colonne du Sheet : la jauge fibres est
+ * dure, comme les deux autres.
+ */
+function avecRepli(j, repli) {
+  const valeur = Number(j.valeur) || 0;
+  const cible = Number(j.cible) > 0 ? Number(j.cible) : (Number(repli) || 0);
+  return { valeur, cible, ratio: cible > 0 ? valeur / cible : null };
+}
+
 function gaugesRow(jauges) {
   // La jauge fibres est absente tant que le backend n'a pas été redéployé : on
   // ne la rend que si elle arrive, sinon l'app plante à froid entre les deux
-  // déploiements (même garde-fou que `jours` dans bilan.js).
+  // déploiements (même garde-fou que `jours` dans bilan.js). Le repli porte sur
+  // la CIBLE manquante, jamais sur la valeur consommée — celle-là, seul le
+  // backend la connaît.
   const fib = jauges.fibres_g;
   return h('section', { class: 'gauges', 'aria-label': 'Apports du jour' },
-    gauge({ kind: 'prot', label: 'Protéines', unit: 'g',
+    gauge({ kind: 'prot', label: 'Protéines', unit: 'g', fmt: num,
       valeur: jauges.prot_g.valeur, cible: jauges.prot_g.cible, ratio: jauges.prot_g.ratio }),
-    gauge({ kind: 'kcal', label: 'Calories', unit: 'kcal',
+    gauge({ kind: 'kcal', label: 'Calories', unit: 'kcal', fmt: numEntier,
       valeur: jauges.kcal.valeur, cible: jauges.kcal.cible, ratio: jauges.kcal.ratio }),
-    fib ? gauge({ kind: 'fibres', label: 'Fibres', unit: 'g',
-      valeur: fib.valeur, cible: fib.cible, ratio: fib.ratio }) : null,
+    fib ? gauge({ kind: 'fibres', label: 'Fibres', unit: 'g', fmt: num,
+      ...avecRepli(fib, REPLI_CIBLES.fibres_g) }) : null,
   );
 }
 
@@ -136,6 +165,12 @@ function invRow(food, onChange) {
     min: '0', max: '100', step: '1', value: String(depart),
     'aria-label': `Part du paquet consommée — ${food.nom}`,
   });
+  // La position validée est dérivée du stock : elle peut tomber hors grille
+  // (32 % d'un paquet de 500 g). On l'ajoute aux crans, sinon le curseur ne
+  // pourrait plus revenir exactement là où il était.
+  const crans = CRANS_PAQUET.includes(depart)
+    ? CRANS_PAQUET
+    : [...CRANS_PAQUET, depart].sort((a, b) => a - b);
 
   const row = h('div', { class: 'inv-row', id: `food-${food.id}` },
     h('div', { class: 'inv-row__top' },
@@ -143,7 +178,7 @@ function invRow(food, onChange) {
       level,
     ),
     infoBlock(food, meta),
-    thumbOnlySlider(slider),
+    thumbOnlySlider(slider, crans),
     delta,
   );
 

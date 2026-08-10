@@ -8,8 +8,8 @@ import { renderCuisine } from './cuisine.js';
 import { renderBilan } from './bilan.js';
 import { openQuoiManger } from './quoimanger.js';
 import { openScan } from './scan.js';
-import { flushQueue, updateQueueBadge, registerServiceWorker, applyUpdate } from './sync.js';
-import { DEFAULT_API_BASE } from './config.js';
+import { flushQueue, updateQueueBadge, registerServiceWorker, applyUpdate, versionAppShell, chercherMiseAJour } from './sync.js';
+import { DEFAULT_API_BASE, APP_VERSION } from './config.js';
 
 const appEl = $('#app');
 const sheetRoot = $('#sheet-root');
@@ -566,6 +566,57 @@ function applyMacros(state, macros = {}, qty = 1, sign = +1) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Bloc « Version » de la feuille Réglages                             */
+/* ------------------------------------------------------------------ */
+/**
+ * Deux chiffres, pas un : `APP_VERSION` = la version du CODE en train de
+ * tourner, `versionAppShell()` = celle de l'APP-SHELL EN CACHE. Elles doivent
+ * être égales ; si elles divergent, c'est précisément le symptôme d'une mise à
+ * jour à moitié appliquée, et on préfère le voir que le deviner.
+ * Le bouton force le contrôle sans attendre le prochain retour au premier plan
+ * (le CDN de Pages garde l'ancienne version jusqu'à 10 min, `max-age=600`).
+ */
+function versionBlock() {
+  const shellEl = h('b', {}, '…');
+  const etat = h('div', { class: 'field__hint' }, 'Contrôle de la version…');
+  const btn = h('button', { class: 'btn btn--ghost', type: 'button' }, 'Chercher une mise à jour');
+
+  versionAppShell().then((shell) => {
+    if (shell == null) {
+      shellEl.textContent = 'aucun (pas de cache hors-ligne)';
+      etat.textContent = 'Service worker inactif — normal en développement local.';
+      return;
+    }
+    shellEl.textContent = shell;
+    etat.textContent = shell === APP_VERSION
+      ? 'Code et app-shell en cache sont sur la même version.'
+      : `⚠ Le code chargé est en ${APP_VERSION} et l'app-shell en cache en ${shell} : `
+        + 'relance l’app, ou force le contrôle ci-dessous.';
+  });
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const avant = btn.textContent;
+    btn.textContent = 'Recherche…';
+    const res = await chercherMiseAJour();
+    if (res === 'bascule') { btn.textContent = 'Mise à jour — rechargement…'; return; }
+    btn.disabled = false;
+    btn.textContent = avant;
+    toast(res === 'a-jour' ? 'Déjà à la dernière version' : 'Service worker indisponible',
+      res === 'a-jour' ? 'ok' : 'err');
+  });
+
+  return h('div', { class: 'field' },
+    h('label', {}, 'Version'),
+    h('div', { class: 'version-line' },
+      h('span', {}, 'code ', h('b', {}, APP_VERSION)),
+      h('span', {}, 'app-shell ', shellEl)),
+    etat,
+    btn,
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Feuille Réglages / Token                                           */
 /* ------------------------------------------------------------------ */
 function openSettings({ force = false } = {}) {
@@ -604,6 +655,7 @@ function openSettings({ force = false } = {}) {
       h('label', {}, 'API_BASE (avancé)'),
       apiInput,
       h('div', { class: 'field__hint' }, 'Laisse la valeur par défaut sauf redéploiement du backend.')),
+    versionBlock(),
     errEl,
     h('div', { class: 'sheet__actions' },
       force ? null : h('button', { class: 'btn btn--ghost', onclick: close }, 'Fermer'),

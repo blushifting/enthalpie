@@ -300,6 +300,12 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   border-radius: 20px 20px 0 0;
   padding: 20px var(--pad) calc(var(--safe-bot) + 22px);
   box-shadow: 0 -12px 40px rgba(0,0,0,.5);
+  /* Les Réglages remplissent l'écran sur un 360 × 640 depuis l'ajout du bloc
+     « Version » : sans ça le bouton Enregistrer sortirait du cadre, invisible
+     et inatteignable (la feuille ne défilait pas). */
+  max-height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .sheet__handle { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 16px; }
 .sheet h2 { font-size: 18px; margin: 0 0 4px; }
@@ -314,6 +320,18 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .field input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); border-color: var(--accent); }
 .field__hint { font-size: 11.5px; color: var(--txt-dim); margin-top: 5px; line-height: 1.45; }
 .sheet__actions { display: flex; gap: 10px; margin-top: 8px; }
+
+/* Bloc « Version » des Réglages : code chargé vs app-shell réellement en cache. */
+.version-line {
+  display: flex; gap: 10px; flex-wrap: wrap;
+  font-size: 13px; color: var(--txt-muted); font-variant-numeric: tabular-nums;
+}
+.version-line span {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px 11px;
+}
+.version-line b { color: var(--txt); font-weight: 700; }
+.field .btn--ghost { margin-top: 8px; }
 
 .form-error { color: var(--danger); font-size: 13px; margin: 4px 0 12px; min-height: 1em; }
 

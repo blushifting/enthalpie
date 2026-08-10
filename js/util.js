@@ -36,11 +36,33 @@ const THUMB_PX = 30;
  * (`pointer-events: none` sur l'input, cf. `.slider-wrap` dans styles.css) et
  * on pilote la valeur nous-mêmes depuis le wrapper.
  *
- * Le clavier reste natif (l'input garde le focus et ses flèches).
+ * `crans` (optionnel) : liste triée des SEULES valeurs atteignables. Le geste
+ * s'aimante alors dessus au lieu de suivre `step`, et les flèches du clavier
+ * sautent d'un cran (elles suivraient `step` sinon, ce qui produirait des
+ * valeurs hors grille).
+ *
  * Renvoie l'élément à insérer dans le DOM à la place de l'input.
  */
-export function thumbOnlySlider(input) {
+export function thumbOnlySlider(input, crans) {
   const wrap = h('div', { class: 'slider-wrap' }, input);
+  const grille = Array.isArray(crans) && crans.length ? crans : null;
+
+  // Valeur atteignable la plus proche d'une position brute.
+  const aimante = (brut) => {
+    if (!grille) {
+      const min = Number(input.min) || 0;
+      const step = Number(input.step) || 1;
+      return min + Math.round((brut - min) / step) * step;
+    }
+    return grille.reduce((a, b) => (Math.abs(b - brut) < Math.abs(a - brut) ? b : a));
+  };
+  // Cran suivant / précédent (clavier) : ±1 index dans la grille.
+  const voisin = (sens) => {
+    const v = Number(input.value);
+    if (!grille) return v + sens * (Number(input.step) || 1);
+    const i = grille.indexOf(aimante(v));
+    return grille[Math.min(grille.length - 1, Math.max(0, i + sens))];
+  };
 
   const geom = () => {
     const r = input.getBoundingClientRect();
@@ -72,13 +94,29 @@ export function thumbOnlySlider(input) {
     if (!dragging) return;
     e.preventDefault();
     const { left, min, span, usable } = geom();
-    const step = Number(input.step) || 1;
     const ratio = (e.clientX - saisie - left - THUMB_PX / 2) / usable;
     const brut = min + Math.min(1, Math.max(0, ratio)) * span;
-    const v = Math.min(Number(input.max), Math.max(min, min + Math.round((brut - min) / step) * step));
+    const v = Math.min(Number(input.max), Math.max(min, aimante(brut)));
     if (String(v) === input.value) return;
     input.value = String(v);
     input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
+  // Flèches : un cran de la grille, pas un `step`. Sans ça le clavier serait le
+  // seul moyen d'atteindre une valeur interdite au doigt.
+  const TOUCHES = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 };
+  input.addEventListener('keydown', (e) => {
+    if (!grille || input.disabled) return;
+    let v;
+    if (e.key in TOUCHES) v = voisin(TOUCHES[e.key]);
+    else if (e.key === 'Home') v = grille[0];
+    else if (e.key === 'End') v = grille[grille.length - 1];
+    else return;
+    e.preventDefault();
+    if (String(v) === input.value) return;
+    input.value = String(v);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
   });
 
   const fin = (e) => {
@@ -101,6 +139,10 @@ export function num(n) {
   const v = Number(n) || 0;
   return Number.isInteger(v) ? String(v) : v.toFixed(1).replace(/\.0$/, '');
 }
+
+/** Arrondi à l'unité. Les calories n'ont aucune précision à la décimale, et
+ *  « 1520,5 » déborde du cercle de la jauge. */
+export function numEntier(n) { return String(Math.round(Number(n) || 0)); }
 
 const MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
 /** 'yyyy-MM-dd' → '26 juin' (chaîne vide si non parsable). */

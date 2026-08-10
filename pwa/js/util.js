@@ -134,10 +134,11 @@ export function thumbOnlySlider(input, crans) {
 /** Vide un noeud. */
 export function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
 
-/** Nombre lisible : entiers pleins, 1 décimale sinon. */
+/** Nombre lisible : entiers pleins, 1 décimale sinon, **virgule décimale**
+ *  (l'UI est en français ; sortie d'affichage uniquement, jamais reparsée). */
 export function num(n) {
   const v = Number(n) || 0;
-  return Number.isInteger(v) ? String(v) : v.toFixed(1).replace(/\.0$/, '');
+  return Number.isInteger(v) ? String(v) : v.toFixed(1).replace(/\.0$/, '').replace('.', ',');
 }
 
 /** Arrondi à l'unité. Les calories n'ont aucune précision à la décimale, et

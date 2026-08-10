@@ -127,6 +127,40 @@ export function registerServiceWorker(onUpdateReady) {
 let updateRequested = false;
 let reloading = false;
 
+/**
+ * Version de l'app-shell réellement en cache, lue depuis le nom du cache du SW
+ * (`enthalpie-shell-v16` → `v16`). C'est la seule mesure fiable de « quelle
+ * version tourne sur cet appareil » : le code chargé peut venir d'un cache plus
+ * ancien que le dernier déploiement.
+ * @returns {Promise<string|null>} null si pas de SW (localhost, mode démo…).
+ */
+export async function versionAppShell() {
+  if (!('caches' in window)) return null;
+  try {
+    const noms = (await caches.keys()).filter((k) => k.startsWith('enthalpie-shell-'));
+    if (!noms.length) return null;
+    // Plusieurs caches = une purge d'`activate` n'a pas encore eu lieu : on
+    // montre tout plutôt que d'en choisir un au hasard.
+    return noms.map((n) => n.replace('enthalpie-shell-', '')).join(' + ');
+  } catch { return null; }
+}
+
+/**
+ * Force une recherche de mise à jour, sans attendre le prochain retour au
+ * premier plan. Utile quand le CDN de Pages a servi l'ancienne version au
+ * moment où l'app cherchait (fenêtre de 10 min, `max-age=600`).
+ * @returns {Promise<'bascule'|'a-jour'|'absent'>} 'bascule' → le rechargement est lancé.
+ */
+export async function chercherMiseAJour() {
+  if (!('serviceWorker' in navigator)) return 'absent';
+  const reg = await navigator.serviceWorker.getRegistration();
+  if (!reg) return 'absent';
+  try { await reg.update(); } catch { return 'absent'; }
+  if (!reg.waiting) return 'a-jour';
+  applyUpdate(reg);                 // → controllerchange → location.reload()
+  return 'bascule';
+}
+
 /** Tap sur « Recharger » : le SW en attente prend la main → controllerchange → reload. */
 export function applyUpdate(reg) {
   if (!reg || !reg.waiting) return;

@@ -1,5 +1,13 @@
 // Constantes globales (aucun secret ici — le token vit en localStorage).
 
+// Version du build, affichée dans Réglages.
+// ⚠️ À garder synchro avec `CACHE` dans `sw.js` — les deux sont bumpés ensemble
+// à chaque release. Pas de source unique possible : `sw.js` est un worker
+// classique, il ne peut pas importer ce module. L'écran Réglages affiche donc
+// les DEUX valeurs : si elles divergent, l'anomalie se voit au lieu de rester
+// silencieuse (typiquement : app-shell en cache plus vieux que le code chargé).
+export const APP_VERSION = 'v17';
+
 // API_BASE du backend Apps Script déjà déployé (cf. BUILD-PWA.md §1).
 export const DEFAULT_API_BASE =
   'https://script.google.com/macros/s/AKfycbykJsqIOSd40mhD9YNOHg42rEhgg_Bzf_EAdMJnEaaiD1C9P29Ukg4x44mUcW00SBSN/exec';

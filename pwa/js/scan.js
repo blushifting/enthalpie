@@ -21,6 +21,8 @@
 // saisie manuelle. Le point d'accroche est prêt (voir tryOtherDecoder_).
 import { h, clear, num, numSaisie, parseNum, saisieDecimale, macroChips, toast } from './util.js';
 import { fetchOFF, ApiError } from './api.js';
+import { CATEGORIES } from './config.js';
+import { devineCategorie } from './categories.js';
 
 const EAN_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'];
 
@@ -241,6 +243,30 @@ export function openScan(ctx) {
     [poidsIn, kcalIn, protIn, stockIn].forEach((f) =>
       f.input.addEventListener('input', syncPreview));
 
+    // Rangement dès la création : sans ça, chaque scan rouvrirait la dette de
+    // produits non rangés que l'écran de rangement vient d'éponger.
+    let categorie = devineCategorie((fiche && fiche.nom) || '');
+    const catBtns = [];
+    const catRow = h('div', { class: 'ranger-chips' });
+    CATEGORIES.forEach((c) => {
+      const b = h('button', {
+        class: `inv-filtre ${c.id === categorie ? 'is-on' : ''}`, type: 'button',
+        'aria-pressed': c.id === categorie ? 'true' : 'false',
+      }, c.court);
+      b.addEventListener('click', () => {
+        categorie = c.id === categorie ? '' : c.id;
+        catBtns.forEach(({ id, el }) => {
+          el.classList.toggle('is-on', id === categorie);
+          el.setAttribute('aria-pressed', id === categorie ? 'true' : 'false');
+        });
+      });
+      catBtns.push({ id: c.id, el: b });
+      catRow.append(b);
+    });
+    const catField = h('div', { class: 'field' },
+      h('label', {}, 'Où le ranges-tu ?'), catRow,
+      h('div', { class: 'field__hint' }, 'Sert à retrouver le produit dans « Mon stock ». Facultatif.'));
+
     const glutenBox = h('input', { type: 'checkbox', checked: !!(fiche && fiche.flag_gluten === 'oui') });
     const lactoseBox = h('input', { type: 'checkbox', checked: !!(fiche && fiche.flag_lactose === 'oui') });
     const flags = h('div', { class: 'scan-flags' },
@@ -287,6 +313,7 @@ export function openScan(ctx) {
         // distinguables — la jauge fibres additionne sans jamais estimer.
         fibres_100g: fibres == null ? '' : fibres,
         poids_paquet_g: poids,
+        categorie,
         flag_gluten: glutenBox.checked ? 'oui' : 'non',
         flag_lactose: lactoseBox.checked ? 'oui' : 'non',
         stock_initial: Math.round(paquets * poids),
@@ -300,7 +327,7 @@ export function openScan(ctx) {
       h('p', { class: 'scan-note' }, note),
       nomIn.el, poidsIn.el,
       kcalIn.el, protIn.el, fibresIn.el, stockIn.el,
-      preview, flags, errEl,
+      preview, catField, flags, errEl,
       h('div', { class: 'sheet__actions' },
         h('button', { class: 'btn btn--ghost', type: 'button', onclick: () => showScanner() }, 'Annuler'),
         save));

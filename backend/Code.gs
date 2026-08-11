@@ -13,6 +13,7 @@
  *   GET  ?token=…&action=cuisine        → recette de la semaine + biblio batch + compteurs
  *   GET  ?token=…&action=bilan          → prot/kcal/fibres vs cibles : 7 derniers jours + 4 sem.
  *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement | exterieur
+ *   POST {token, action:'set_categorie', items:[{produit_id, categorie}]} → rangement du stock
  *
  * Conforme à SPEC.md §3 (modèle de données) et §5-6 (moteur / liste).
  * 100 % déterministe, aucune IA ici (SPEC §1 principe 6).
@@ -29,9 +30,13 @@
 // faux. L'app raisonne désormais en pourcentage d'un paquet dont on connaît le
 // poids. Migration des données existantes : migrerEnGrammes().
 var SCHEMA = {
+  // ⚠️ `categorie` ajoutée EN FIN DE LISTE (2026-08-11), pour la même raison que
+  // dans `objectifs` : setup() réécrit la ligne d'en-tête sans toucher aux
+  // données, une insertion au milieu décalerait tout.
   produits: [
     'id', 'nom', 'marque_magasin', 'ean', 'poids_paquet_g',
-    'kcal_100g', 'prot_100g', 'fibres_100g', 'flag_gluten', 'flag_lactose', 'perissable_jours', 'actif'
+    'kcal_100g', 'prot_100g', 'fibres_100g', 'flag_gluten', 'flag_lactose', 'perissable_jours', 'actif',
+    'categorie'
   ],
   plats: [
     'id', 'nom', 'creneau', 'composition', 'kcal_100g', 'prot_100g', 'fibres_100g',
@@ -169,6 +174,39 @@ function params_() {
 // (assurerCibleFibres_). Une seule définition pour que les deux ne divergent pas.
 var FIBRES_DEFAUT = { cible: 30, tolerance: 5 };
 
+// Catégories de rangement (choix d'Azur du 2026-08-11 : « où est-ce rangé »,
+// et non « qu'est-ce que ça apporte » — on cherche un aliment là où il est).
+// Un produit n'en porte qu'UNE ; vide = pas encore rangé, la PWA le signale.
+// Liste FERMÉE : la PWA affiche une pastille par valeur, une valeur inconnue
+// arrivée par le Sheet retomberait dans « non rangé ».
+var CATEGORIES = ['frigo', 'congelo', 'placard', 'fruits_legumes', 'epices'];
+
+/** Normalise une catégorie : hors liste ou vide → '' (non rangé). */
+function normCategorie_(v) {
+  var s = String(v == null ? '' : v).trim().toLowerCase();
+  return CATEGORIES.indexOf(s) === -1 ? '' : s;
+}
+
+// La colonne `categorie` n'existe pas sur un Sheet créé avant le 2026-08-11 :
+// `readTable_` renverrait `undefined` et l'écriture d'un rangement irait dans
+// le vide. Même parade que `assurerCibleFibres_` — l'en-tête est complété à la
+// première lecture du catalogue, sans aucun geste manuel (ni `setup()`).
+var _colonnesProduitsVerifiees = false;
+function assurerColonnesProduits_() {
+  if (_colonnesProduitsVerifiees) return;
+  _colonnesProduitsVerifiees = true;
+  try {
+    var sh = sheet_('produits');
+    var largeur = SCHEMA.produits.length;
+    var entetes = sh.getRange(1, 1, 1, largeur).getValues()[0];
+    if (entetes.join('') !== SCHEMA.produits.join('')) {
+      sh.getRange(1, 1, 1, largeur).setValues([SCHEMA.produits]).setFontWeight('bold');
+    }
+  } catch (e) {
+    Logger.log('assurerColonnesProduits_ : ' + e);
+  }
+}
+
 /** Objet objectifs (première ligne). */
 function objectifs_() {
   assurerCibleFibres_();
@@ -249,6 +287,7 @@ function handle_(e, p) {
       case 'search_catalog': result = searchCatalog_(p.q); break;
       case 'log':            result = postLog_(p); break;
       case 'add_produit':    result = addProduit_(p); break;
+      case 'set_categorie':  result = setCategorie_(p); break;
       default: throw new Error('Action inconnue : ' + action);
     }
     return json_({ ok: true, action: action, data: result });
@@ -333,6 +372,7 @@ function getState_() {
 }
 
 function getCatalog_() {
+  assurerColonnesProduits_();
   // Un plat cuisiné n'a pas d'emballage : son « paquet » est la fournée. Le
   // front en a besoin comme référence du curseur (% de la fournée mangé), et
   // ce poids n'est pas une colonne — il se déduit de la composition.
@@ -751,6 +791,7 @@ function coursesValidees_(p, now) {
  * Valeurs nutritionnelles POUR 100 g ; stock_initial et poids_paquet_g en grammes.
  */
 function addProduit_(p) {
+  assurerColonnesProduits_();
   var f = p.produit || p; // accepte {produit:{…}} ou champs à plat
   var nom = trim_(f.nom || '');
   if (!nom) throw new Error('nom requis pour ajouter un produit.');
@@ -780,7 +821,8 @@ function addProduit_(p) {
     flag_gluten: normFlag_(f.flag_gluten),
     flag_lactose: normFlag_(f.flag_lactose),
     perissable_jours: (f.perissable_jours === '' || f.perissable_jours == null) ? '' : Number(f.perissable_jours),
-    actif: 'oui'
+    actif: 'oui',
+    categorie: normCategorie_(f.categorie)
   });
 
   // Stock initial optionnel (grammes) ; 0 par défaut : on scanne souvent un
@@ -820,8 +862,36 @@ function publicProduit_(pr) {
     // Chaîne vide conservée telle quelle : « on ne sait pas » ≠ 0 (skill §6).
     fibres_100g: (pr.fibres_100g === '' || pr.fibres_100g == null) ? '' : Number(pr.fibres_100g),
     poids_paquet_g: Number(pr.poids_paquet_g) || 0,
-    ean: String(pr.ean || ''), actif: pr.actif
+    ean: String(pr.ean || ''), actif: pr.actif,
+    categorie: normCategorie_(pr.categorie)
   };
+}
+
+/**
+ * Range des produits : {action:'set_categorie', items:[{produit_id, categorie}]}.
+ * Écrit la seule cellule `categorie`, ligne par ligne (le reste ne bouge pas).
+ * Une catégorie vide déclasse volontairement le produit en « non rangé » —
+ * c'est le moyen d'annuler un rangement fait par erreur.
+ */
+function setCategorie_(p) {
+  assurerColonnesProduits_();
+  var items = p.items || [];
+  if (!items.length) return { rangés: 0 };
+
+  var sh = sheet_('produits');
+  var values = sh.getDataRange().getValues();
+  var col = SCHEMA.produits.indexOf('categorie') + 1;
+  var ligneDe = {};
+  for (var r = 1; r < values.length; r++) ligneDe[String(values[r][0]).trim()] = r + 1;
+
+  var n = 0;
+  items.forEach(function (it) {
+    var ligne = ligneDe[trim_(it.produit_id || it.id || '')];
+    if (!ligne) return;                    // id inconnu : ignoré, pas d'erreur bloquante
+    sh.getRange(ligne, col).setValue(normCategorie_(it.categorie));
+    n++;
+  });
+  return { ranges: n };
 }
 
 /** Ajustement manuel de stock (secours). */

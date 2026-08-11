@@ -6,7 +6,7 @@
 // classique, il ne peut pas importer ce module. L'écran Réglages affiche donc
 // les DEUX valeurs : si elles divergent, l'anomalie se voit au lieu de rester
 // silencieuse (typiquement : app-shell en cache plus vieux que le code chargé).
-export const APP_VERSION = 'v18';
+export const APP_VERSION = 'v19';
 
 // API_BASE du backend Apps Script déjà déployé (cf. BUILD-PWA.md §1).
 export const DEFAULT_API_BASE =
@@ -26,6 +26,18 @@ export const REPLI_TOLERANCES = {
   fibres_g: 5,           // ±5 g
 };
 
+// Catégories de rangement du stock (2026-08-11) — « où est-ce rangé », et non
+// « qu'est-ce que ça apporte » : on cherche un aliment là où il est posé.
+// ⚠️ Les `id` doivent rester identiques à `CATEGORIES` dans backend/Code.gs.
+// `court` sert aux pastilles de filtre, où la place manque sous 360 px.
+export const CATEGORIES = [
+  { id: 'frigo',          label: 'Frigo',              court: 'Frigo' },
+  { id: 'congelo',        label: 'Congélo',            court: 'Congélo' },
+  { id: 'placard',        label: 'Placard sec',        court: 'Placard' },
+  { id: 'fruits_legumes', label: 'Fruits & légumes',   court: 'Fruits/lég' },
+  { id: 'epices',         label: 'Épices & condiments', court: 'Épices' },
+];
+
 // Clés localStorage.
 export const KEY = {
   token:   'enthalpie.token',
@@ -41,4 +53,5 @@ export const KEY = {
   exclus:  'enthalpie.courses.exclus',   // articles « ne plus proposer »
   last:    'enthalpie.courses.last',     // dernier lot validé (pour annuler)
   queue:   'enthalpie.queue',
+  filtre:  'enthalpie.stock.filtre',     // pastille de catégorie active, retenue entre deux visites
 };

@@ -736,6 +736,60 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .scan-qty { padding-left: 0; margin-bottom: 6px; }
 .scan-nocode { margin-top: 12px; font-size: 13px; }
 
+/* ---------- Rangement du stock : recherche, pastilles, intertitres ---------- */
+.inv-search {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 0 12px; margin: 10px 0 8px;
+}
+.inv-search__ico { color: var(--txt-dim); font-size: 17px; }
+.inv-search__input {
+  flex: 1; height: 46px; background: transparent; border: 0; outline: none;
+  color: var(--txt); font-size: 15px; font-family: inherit; min-width: 0;
+}
+.inv-search__input::placeholder { color: var(--txt-dim); }
+.inv-search__input::-webkit-search-cancel-button { filter: invert(.6); }
+
+/* Barre de filtres : elle déborde volontairement pour rester sur UNE ligne —
+   deux lignes de pastilles mangeraient la hauteur des jauges sur un 360 px. */
+.inv-filtres {
+  display: flex; gap: 7px; margin-bottom: 10px;
+  overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
+}
+.inv-filtres::-webkit-scrollbar { display: none; }
+.inv-filtres[hidden] { display: none; }
+.inv-filtre {
+  flex: 0 0 auto; white-space: nowrap;
+  background: var(--surface); border: 1px solid var(--line); color: var(--txt-muted);
+  border-radius: 999px; padding: 7px 13px; font-size: 12.5px; font-weight: 600;
+}
+.inv-filtre.is-on { background: var(--accent); border-color: transparent; color: #0b1020; }
+
+/* Intertitre de groupe : dit pourquoi les entamés sont en tête. Discret — ce
+   n'est pas une section, juste une frontière dans le tri. */
+.inv-group {
+  color: var(--txt-dim); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .6px; font-weight: 600; margin: 6px 2px 4px;
+}
+.inv-group[hidden] { display: none; }
+
+.ranger-cta {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: var(--radius-sm); padding: 11px 14px;
+  font-size: 13px; font-weight: 600; color: var(--txt); margin-bottom: 4px;
+}
+.ranger-cta__go { color: var(--accent); }
+
+/* Feuille « Ranger mes produits » */
+.ranger-head { margin-bottom: 10px; }
+.ranger-count { font-size: 12.5px; color: var(--txt-muted); font-weight: 600; }
+.ranger-list { display: flex; flex-direction: column; gap: 14px; margin-bottom: 18px; }
+.ranger-item__nom { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.ranger-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
 /* ---------- Bloc « Repas extérieur » (écran Aujourd'hui) ---------- */
 /* Juste sous les jauges : la liste d'en-tête garde son rythme, mais le bloc
    respire un peu moins que quand il fermait l'écran. */

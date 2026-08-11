@@ -424,6 +424,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   border-radius: var(--radius-sm); padding: 12px 14px 14px;
   transition: border-color .15s ease, background .15s ease;
 }
+/* Même piège que .fab : `display: flex` posé ici l'emporte sur le `[hidden]`
+   de la feuille du navigateur, et les lignes filtrées restaient visibles. */
+.inv-row[hidden] { display: none; }
 .inv-row__top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .inv-row__nom { font-size: 15px; font-weight: 600; line-height: 1.25; min-width: 0; }
 .inv-row__level {

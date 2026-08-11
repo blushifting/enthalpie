@@ -5,8 +5,9 @@
 // une saisie erronée (remise au stock). Un seul bouton « Valider ».
 // Tout est en grammes ; les macros du catalogue sont pour 100 g.
 import { h, clear, num, numEntier, thumbOnlySlider } from './util.js';
-import { REPLI_CIBLES } from './config.js';
-import { rank } from './engine.js';
+import { REPLI_CIBLES, CATEGORIES } from './config.js';
+import { normaliser } from './categories.js';
+import { store } from './store.js';
 import { openExterieur } from './exterieur.js';
 
 const R = 42;
@@ -239,6 +240,11 @@ function invRow(food, onChange) {
 
   return {
     el: row,
+    food,
+    categorie: categorieDe(food),
+    // Entamé = le paquet en cours a déjà été consommé en partie. Ce sont les
+    // aliments de la semaine en cours, donc ceux qu'on cherche en premier.
+    entame: meta.pct > 0,
     isDirty: dirty,
     // Annuler = revenir à la position que le stock impose, pas à zéro.
     reset() { slider.value = String(depart); renderLevel(); },
@@ -267,6 +273,92 @@ function validateBar(onValider, onAnnuler) {
       count.textContent = `${n} aliment${n > 1 ? 's' : ''} modifié${n > 1 ? 's' : ''}`;
     },
   };
+}
+
+/* ---------- Rangement : catégorie, tri, recherche, pastilles ---------- */
+
+/**
+ * Catégorie d'un article de stock. Un plat batch n'a pas de colonne
+ * `categorie` (l'onglet `plats` n'en a pas) : une fournée cuisinée est au
+ * frigo, c'est le seul rangement qui ait un sens. À revoir le jour où l'onglet
+ * `plats` sera peuplé — ce sera alors une vraie colonne.
+ */
+export function categorieDe(food) {
+  if (food.kind === 'plat') return 'frigo';
+  return String(food.categorie || '');
+}
+
+/** Entamés d'abord, puis alphabétique (accents et casse ignorés). */
+function trierStock(foods) {
+  // Même source que la ligne elle-même (`stockMeta`) : deux définitions de
+  // « entamé » finiraient par diverger, et le tri contredirait l'affichage.
+  const entame = (f) => stockMeta(f).pct > 0;
+  return foods.slice().sort((a, b) => {
+    const ea = entame(a); const eb = entame(b);
+    if (ea !== eb) return ea ? -1 : 1;
+    return normaliser(a.nom).localeCompare(normaliser(b.nom));
+  });
+}
+
+/** Champ de recherche instantané (filtre à la frappe, sans bouton). */
+function champRecherche(onChange) {
+  const input = h('input', {
+    class: 'inv-search__input', type: 'search', inputmode: 'search',
+    placeholder: 'Chercher un aliment', autocomplete: 'off', spellcheck: 'false',
+    'aria-label': 'Chercher un aliment dans le stock',
+  });
+  input.addEventListener('input', () => onChange(input.value));
+  const wrap = h('div', { class: 'inv-search' },
+    h('span', { class: 'inv-search__ico', 'aria-hidden': 'true' }, '⌕'), input);
+  Object.defineProperty(wrap, 'value', { get: () => input.value });
+  return wrap;
+}
+
+/**
+ * Pastilles de catégorie. N'affiche QUE les catégories réellement présentes
+ * dans le stock : une pastille qui ne filtre rien est un piège à tap.
+ * Le choix est retenu d'une visite à l'autre, et retombe sur « Tout » si la
+ * catégorie mémorisée a disparu du stock (dernier paquet fini).
+ */
+function filtreBar(foods, onPick) {
+  const presentes = new Set(foods.map(categorieDe));
+  const dispo = CATEGORIES.filter((c) => presentes.has(c.id));
+  const nonRanges = presentes.has('');
+
+  let actif = store.getFiltre();
+  const valide = (actif === '') || dispo.some((c) => c.id === actif) || (actif === '_vide' && nonRanges);
+  if (!valide) { actif = ''; store.setFiltre(''); }
+
+  const el = h('div', { class: 'inv-filtres', role: 'group', 'aria-label': 'Filtrer par rangement' });
+  const boutons = [];
+  const ajouter = (id, texte) => {
+    const b = h('button', {
+      class: `inv-filtre ${id === actif ? 'is-on' : ''}`, type: 'button',
+      'aria-pressed': id === actif ? 'true' : 'false',
+    }, texte);
+    b.addEventListener('click', () => {
+      actif = id;
+      store.setFiltre(id);
+      boutons.forEach(({ id: i, b: btn }) => {
+        btn.classList.toggle('is-on', i === actif);
+        btn.setAttribute('aria-pressed', i === actif ? 'true' : 'false');
+      });
+      onPick(actif);
+    });
+    boutons.push({ id, b });
+    el.append(b);
+  };
+
+  ajouter('', 'Tout');
+  dispo.forEach((c) => ajouter(c.id, c.court));
+  if (nonRanges) ajouter('_vide', 'Non rangés');
+
+  // Une seule catégorie en stock (ou aucune) : la barre n'apporte rien.
+  if (dispo.length + (nonRanges ? 1 : 0) < 2) el.hidden = true;
+
+  // Valeur transmise telle quelle : '' = tout, '_vide' = les non rangés,
+  // sinon l'id de catégorie. Un seul vocabulaire, aucune traduction en route.
+  return { el, actif: () => actif };
 }
 
 /* ---------- Bloc « Repas extérieur » ---------- */
@@ -309,9 +401,13 @@ export function renderToday(root, model, handlers) {
   // Manger dehors : au-dessus de l'inventaire, à portée de pouce.
   root.append(exterieurBlock(exterieurs || [], handlers.onExterieur));
 
-  // Aliments en stock, triés silencieusement par priorité du jour.
+  // Aliments en stock, ENTAMÉS D'ABORD puis par ordre alphabétique (choix
+  // d'Azur du 2026-08-11). L'ancien tri par priorité du jour (`rank`) est
+  // abandonné ici : il changeait l'ordre chaque matin, aucune mémoire visuelle
+  // ne pouvait se former — c'était la cause du « bordel » ressenti. `rank`
+  // continue de servir « Quoi manger ? », son vrai terrain.
   const dispo = foods.filter((f) => (Number(f.stock) || 0) > 0);
-  const ordered = rank(state, dispo).map((r) => r.item);
+  const ordered = trierStock(dispo);
 
   const listEl = h('div', { class: 'inv-list' });
   const infoBtn = h('button', { class: 'infotoggle', type: 'button', 'aria-pressed': 'false' }, 'ⓘ nutri');
@@ -325,30 +421,78 @@ export function renderToday(root, model, handlers) {
     h('span', {}, 'Mon stock'),
     infoBtn,
   ));
-  root.append(h('p', { class: 'section-hint' },
-    'Glisse chaque curseur sur la part que tu as mangée (0 → 100 %), puis Valide.'));
 
   if (!ordered.length) {
     root.append(h('div', { class: 'state', style: 'padding:32px 8px' },
       h('div', { class: 'state__icon' }, '🧺'),
       h('div', { class: 'state__msg' }, 'Aucun aliment en stock. Passe par « Courses » pour réapprovisionner.')));
-  } else {
-    const bar = validateBar(() => onValider(), () => onAnnuler());
-    const rows = ordered.map((f) => invRow(f, () => updateBar()));
-    rows.forEach((r) => listEl.append(r.el));
-    root.append(listEl);
-    root.append(bar.el);
-
-    function updateBar() {
-      const n = rows.filter((r) => r.isDirty()).length;
-      bar.set(n);
-      if (fab) fab.hidden = n > 0;           // le FAB s'efface tant qu'il y a des modifs
-    }
-    function onAnnuler() { rows.forEach((r) => r.reset()); updateBar(); }
-    function onValider() {
-      const changes = rows.map((r) => r.getChange()).filter(Boolean);
-      if (changes.length) handlers.onCommit(changes);
-    }
-    updateBar();
+    return;
   }
+
+  // Bouton de rangement : n'apparaît que s'il reste des produits sans catégorie.
+  const aRanger = foods.filter((f) => f.kind === 'produit' && !categorieDe(f));
+  if (aRanger.length && handlers.onRanger) {
+    root.append(h('button', { class: 'ranger-cta', type: 'button', onclick: () => handlers.onRanger() },
+      h('span', {}, `${aRanger.length} produit${aRanger.length > 1 ? 's' : ''} pas encore rangé${aRanger.length > 1 ? 's' : ''}`),
+      h('span', { class: 'ranger-cta__go' }, 'Ranger ›')));
+  }
+
+  const bar = validateBar(() => onValider(), () => onAnnuler());
+  const rows = ordered.map((f) => invRow(f, () => updateBar()));
+
+  // Les lignes sont construites UNE fois et se contentent de se masquer : un
+  // curseur déplacé puis filtré garde sa position (reconstruire la liste la
+  // perdrait, et avec elle une saisie non validée).
+  const filtres = filtreBar(ordered, (cat) => appliquer(cat, chercher.value));
+  const chercher = champRecherche((q) => appliquer(filtres.actif(), q));
+  const vide = h('p', { class: 'crs-empty', hidden: true }, 'Aucun aliment ne correspond.');
+
+  const enCours = h('p', { class: 'inv-group', hidden: true }, 'Entamés');
+  const reste = h('p', { class: 'inv-group', hidden: true }, 'Pas entamés');
+  rows.forEach((r) => listEl.append(r.el));
+  listEl.prepend(reste);
+  listEl.prepend(enCours);
+  // Les deux intertitres se placent aux frontières du tri : « Entamés » en tête,
+  // « Pas entamés » juste avant la première ligne pleine.
+  const premierPlein = rows.find((r) => !r.entame);
+  if (premierPlein) listEl.insertBefore(reste, premierPlein.el);
+
+  root.append(chercher, filtres.el, listEl, vide, bar.el);
+
+  /** Applique catégorie + recherche : les lignes hors sélection se masquent. */
+  function appliquer(cat, q) {
+    const requete = normaliser(q).trim();
+    let visibles = 0;
+    let entamesVus = 0;
+    let pleinsVus = 0;
+    const passeCat = (r) => (!cat ? true : (cat === '_vide' ? r.categorie === '' : r.categorie === cat));
+    rows.forEach((r) => {
+      const ok = passeCat(r) && (!requete || normaliser(r.food.nom).includes(requete));
+      r.el.hidden = !ok;
+      if (!ok) return;
+      visibles++;
+      if (r.entame) entamesVus++; else pleinsVus++;
+    });
+    // Un intertitre sans ligne sous lui ne veut rien dire ; et un seul groupe
+    // présent n'a pas besoin d'être nommé.
+    const deuxGroupes = entamesVus > 0 && pleinsVus > 0;
+    enCours.hidden = !deuxGroupes;
+    reste.hidden = !deuxGroupes;
+    vide.hidden = visibles > 0;
+  }
+
+  function updateBar() {
+    // Compte TOUTES les lignes modifiées, y compris masquées par un filtre :
+    // une saisie ne doit pas disparaître parce qu'on a tapé dans la recherche.
+    const n = rows.filter((r) => r.isDirty()).length;
+    bar.set(n);
+    if (fab) fab.hidden = n > 0;           // le FAB s'efface tant qu'il y a des modifs
+  }
+  function onAnnuler() { rows.forEach((r) => r.reset()); updateBar(); }
+  function onValider() {
+    const changes = rows.map((r) => r.getChange()).filter(Boolean);
+    if (changes.length) handlers.onCommit(changes);
+  }
+  updateBar();
+  appliquer(filtres.actif(), '');
 }

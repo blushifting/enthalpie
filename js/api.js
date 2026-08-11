@@ -46,6 +46,10 @@ export async function apiPost(body) {
     if (body && body.type === 'courses') {
       return { courses_validees: (body.items || []).map((i) => ({ produit_id: i.produit_id, portions: Number(i.unites) || 0 })) };
     }
+    // Rangement : la fixture est statique, on renvoie juste le compte.
+    if (body && body.action === 'set_categorie') {
+      return { ranges: (body.items || []).length, demo: true };
+    }
     // Ajout catalogue depuis un scan : on simule un produit créé (id factice).
     if (body && body.action === 'add_produit') {
       const f = body.produit || {};
@@ -85,6 +89,8 @@ export const logExterieur = (macros) => postLog({ type: 'exterieur', ...macros }
 // --- Scan : ajout catalogue + recherche (action dédiée, hors "log") ---
 // Nécessitent le redéploiement du backend (endpoints add_produit / search_catalog).
 export const addProduit    = (produit) => apiPost({ action: 'add_produit', produit });
+/** Range des produits : [{produit_id, categorie}] — categorie vide = déclasser. */
+export const setCategories = (items) => apiPost({ action: 'set_categorie', items });
 export const searchCatalog = (q) => apiGet('search_catalog', { q });
 
 // --- Fixture démo (chargée à la volée) ---

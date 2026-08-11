@@ -4,7 +4,7 @@
 // et OpenFoodFacts (jamais cachées — la couche localStorage gère déjà le cache métier).
 // Bump CACHE à chaque release pour purger l'ancien app-shell.
 // ⚠️ Garder synchro avec APP_VERSION dans `js/config.js` (Réglages affiche les deux).
-const CACHE = 'enthalpie-shell-v18';
+const CACHE = 'enthalpie-shell-v19';
 
 const SHELL = [
   './',
@@ -25,6 +25,8 @@ const SHELL = [
   './js/bilan.js',
   './js/exterieur.js',
   './js/scan.js',
+  './js/categories.js',
+  './js/ranger.js',
   './icons/icon.svg',
 ];
 

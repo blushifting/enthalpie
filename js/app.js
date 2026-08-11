@@ -1,13 +1,14 @@
 // Bootstrap : shell, navigation, gate token, chargement state+catalog, handlers.
 import { h, $, clear, toast, num } from './util.js';
 import { store } from './store.js';
-import { getState, getCatalog, getCourses, getCuisine, getBilan, logProduit, logPlat, adjustStock, logCourses, logPotFini, logBatch, logExterieur, addProduit, ApiError, IS_DEMO } from './api.js';
+import { getState, getCatalog, getCourses, getCuisine, getBilan, logProduit, logPlat, adjustStock, logCourses, logPotFini, logBatch, logExterieur, addProduit, setCategories, ApiError, IS_DEMO } from './api.js';
 import { renderToday } from './today.js';
 import { renderCourses } from './courses.js';
 import { renderCuisine } from './cuisine.js';
 import { renderBilan } from './bilan.js';
 import { openQuoiManger } from './quoimanger.js';
 import { openScan } from './scan.js';
+import { openRanger } from './ranger.js';
 import { flushQueue, updateQueueBadge, registerServiceWorker, applyUpdate, versionAppShell, chercherMiseAJour } from './sync.js';
 import { DEFAULT_API_BASE, APP_VERSION } from './config.js';
 
@@ -73,6 +74,8 @@ function buildModel(state, catalog) {
     macros: macros100(pr),
     stock: Number(stock[pr.id]) || 0,          // grammes
     paquet: Number(pr.poids_paquet_g) || 0,    // 0 = poids inconnu
+    // '' = pas encore rangé (colonne absente d'un Sheet d'avant le 2026-08-11).
+    categorie: String(pr.categorie || ''),
   }));
 
   // Plats batch cuisinés = articles de stock au curseur, comme le reste. Leur
@@ -432,7 +435,17 @@ async function renderBilanScreen() {
 const handlers = {
   onCommit: (changes) => commitChanges(changes),   // validation de l'inventaire
   onExterieur: (macros) => exterieurAction(macros),
+  onRanger: () => openRanger(M ? M.foods : [], rangerAction),
 };
+
+/** Enregistre un lot de rangements, puis recharge le catalogue (les pastilles
+ *  de filtre en dépendent). Pas de file offline : ranger n'est pas urgent, et
+ *  rejouer un rangement obsolète écraserait un choix plus récent. */
+async function rangerAction(items) {
+  await setCategories(items);                      // l'erreur remonte → la feuille l'affiche
+  M = null;
+  refreshCurrent();
+}
 
 /**
  * Valide les mouvements d'inventaire d'un coup : chaque baisse de curseur =

@@ -23,6 +23,20 @@ let CuisineData = null; // dernière cuisine chargée (recette semaine + biblio)
 /** Met une action en file offline + rafraîchit le badge « en attente ». */
 function enqueue(payload) { store.enqueue(payload); updateQueueBadge(); }
 
+/**
+ * Trait de progression sous la barre du haut. Les écrans s'affichent désormais
+ * depuis le cache sans attendre le réseau : ce trait est le seul signe qu'un
+ * rafraîchissement est en cours — sans lui, une valeur qui change toute seule
+ * une seconde plus tard paraîtrait sortie de nulle part.
+ * Compteur, parce que plusieurs chargements peuvent se chevaucher.
+ */
+let enCours = 0;
+function syncing(on) {
+  enCours = Math.max(0, enCours + (on ? 1 : -1));
+  const bar = $('#syncbar');
+  if (bar) bar.hidden = enCours === 0;
+}
+
 /** Recharge l'écran courant (après synchro d'une file rejouée, retour réseau…). */
 function refreshCurrent() {
   if (currentScreen === 'today') renderTodayScreen();
@@ -116,11 +130,19 @@ function setScreen(name) {
 /* ------------------------------------------------------------------ */
 /* Écran Aujourd'hui                                                   */
 /* ------------------------------------------------------------------ */
+/**
+ * Premier lancement, rien en cache : logo de l'app plutôt qu'un spinner nu —
+ * le même écran que le splash statique d'index.html, pour qu'il n'y ait aucune
+ * rupture visuelle entre le HTML et la prise de main du JS.
+ * Le logo est cloné depuis la barre du haut : une seule source de vérité.
+ */
 function loadingState() {
   clear(appEl);
-  appEl.append(h('div', { class: 'state' },
-    h('div', { class: 'spinner' }),
-    h('div', { class: 'state__msg' }, 'Chargement de la journée…')));
+  const logo = document.querySelector('.topbar__logo svg');
+  appEl.append(h('div', { class: 'splash' },
+    logo ? logo.cloneNode(true) : null,
+    h('div', { class: 'splash__nom' }, 'Enthalpie'),
+    h('div', { class: 'splash__sub' }, 'Chargement…')));
 }
 
 function errorState(message, onRetry) {
@@ -136,10 +158,38 @@ function paint() {
   if (currentScreen === 'today' && M) renderToday(appEl, M, handlers);
 }
 
+/** Date du jour au format du backend ('yyyy-MM-dd'), en heure locale. */
+function isoLocal(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * Peint l'écran depuis le dernier state/catalog connus SANS attendre le réseau
+ * (Apps Script met facilement une à deux secondes à répondre — c'est tout le
+ * temps de chargement ressenti). Le rafraîchissement se fait ensuite en fond,
+ * comme sur Courses / Cuisine / Bilan.
+ *
+ * Un cache d'hier garde son stock (il n'a pas bougé pendant la nuit) mais pas
+ * ses jauges : les apports de la veille affichés comme ceux du jour seraient un
+ * mensonge, donc les anneaux passent en attente jusqu'à la réponse.
+ * Renvoie false s'il n'y a rien en cache.
+ */
+function peindreDepuisCache() {
+  const cs = store.getCachedState();
+  const cc = store.getCachedCatalog();
+  if (!cs || !cs.state || !cc || !cc.catalog) return false;
+  M = buildModel({ ...cs.state, __attente: cs.state.date !== isoLocal() }, cc.catalog);
+  paint();
+  return true;
+}
+
 async function renderTodayScreen() {
   if (!IS_DEMO && !store.hasToken()) { openSettings({ force: true }); return; }
-  if (M) paint(); else loadingState();
+  if (M) paint();
+  else if (!peindreDepuisCache()) loadingState();
 
+  syncing(true);
   try {
     const [state, catalog] = await Promise.all([getState(), getCatalog()]);
     M = buildModel(state, catalog);
@@ -150,7 +200,10 @@ async function renderTodayScreen() {
     const cs = store.getCachedState();
     const cc = store.getCachedCatalog();
     if (cs && cs.state && cc && cc.catalog) {
-      M = buildModel({ ...cs.state, __offline: true }, cc.catalog);
+      // Même règle qu'en peinture immédiate : le stock d'hier reste vrai, ses
+      // jauges non — hors-ligne on ne peut plus les mettre à jour, alors on les
+      // laisse en attente plutôt que de dater les apports de la veille.
+      M = buildModel({ ...cs.state, __offline: true, __attente: cs.state.date !== isoLocal() }, cc.catalog);
       paint();
       toast('Hors-ligne — données en cache', 'err');
     } else if (err instanceof ApiError && err.kind === 'noauth') {
@@ -158,6 +211,8 @@ async function renderTodayScreen() {
     } else if (currentScreen === 'today') {
       errorState(describeError(err), renderTodayScreen);
     }
+  } finally {
+    syncing(false);
   }
 }
 
@@ -194,6 +249,7 @@ async function renderCoursesScreen() {
   const hadCache = !!(cached && cached.courses);
   if (hadCache) { CoursesData = cached.courses; renderCourses(appEl, cached.courses, coursesHandlers); }
   else loadingMsg('Chargement des courses…');
+  syncing(true);
   try {
     const courses = await getCourses();
     store.cacheCourses(courses);
@@ -209,6 +265,8 @@ async function renderCoursesScreen() {
     } else if (currentScreen === 'courses') {
       errorState(describeError(err), renderCoursesScreen);
     }
+  } finally {
+    syncing(false);
   }
 }
 
@@ -279,6 +337,7 @@ async function renderCuisineScreen() {
   const hadCache = !!(cached && cached.cuisine);
   if (hadCache) { CuisineData = cached.cuisine; renderCuisine(appEl, cached.cuisine, cuisineHandlers); }
   else loadingMsg('Chargement de la cuisine…');
+  syncing(true);
   try {
     const data = await getCuisine();
     store.cacheCuisine(data);
@@ -295,6 +354,8 @@ async function renderCuisineScreen() {
     } else if (currentScreen === 'cuisine') {
       errorState(describeError(err), renderCuisineScreen);
     }
+  } finally {
+    syncing(false);
   }
 }
 
@@ -345,6 +406,7 @@ async function renderBilanScreen() {
   const hadCache = !!(cached && cached.bilan);
   if (hadCache) renderBilan(appEl, cached.bilan);
   else loadingMsg('Chargement du bilan…');
+  syncing(true);
   try {
     const data = await getBilan();
     store.cacheBilan(data);
@@ -359,6 +421,8 @@ async function renderBilanScreen() {
     } else if (currentScreen === 'bilan') {
       errorState(describeError(err), renderBilanScreen);
     }
+  } finally {
+    syncing(false);
   }
 }
 
@@ -533,6 +597,7 @@ async function addProduitAction(fiche) {
 
 /** Recale silencieusement depuis la source de vérité. */
 async function reconcile() {
+  syncing(true);
   try {
     const [state, catalog] = await Promise.all([getState(), getCatalog()]);
     M = buildModel(state, catalog);
@@ -540,6 +605,7 @@ async function reconcile() {
     store.cacheCatalog(catalog);
     paint();
   } catch { /* garde l'optimiste si le recalage échoue */ }
+  finally { syncing(false); }
 }
 
 function cloneModel(m) {

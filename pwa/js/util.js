@@ -145,6 +145,50 @@ export function num(n) {
  *  « 1520,5 » déborde du cercle de la jauge. */
 export function numEntier(n) { return String(Math.round(Number(n) || 0)); }
 
+/* ------------------------------------------------------------------ */
+/* Saisie de nombres — l'UI est en français, donc la VIRGULE décimale   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Lit un champ numérique saisi à la française : « 12,5 » vaut « 12.5 ».
+ * Renvoie null si le champ est vide ou illisible — à distinguer de 0, sans quoi
+ * une valeur non renseignée deviendrait « ce produit contient 0 g ».
+ */
+export function parseNum(v) {
+  const s = String(v == null ? '' : v).trim().replace(/\s/g, '').replace(',', '.');
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Valeur pré-remplie d'un champ numérique (OpenFoodFacts renvoie « 12.5 »). */
+export function numSaisie(v) {
+  if (v == null || v === '') return '';
+  const n = Number(v);
+  return Number.isFinite(n) ? String(n).replace('.', ',') : String(v);
+}
+
+/**
+ * Bride un champ texte sur un décimal écrit à la française. `type=number` ne
+ * convient pas : sur mobile il REFUSE la virgule (la valeur lue devient vide),
+ * or c'est la seule touche décimale du clavier français. On accepte donc les
+ * deux touches et on écrit la virgule.
+ */
+export function saisieDecimale(input) {
+  input.addEventListener('input', () => {
+    const avant = input.value;
+    let v = avant.replace(/\./g, ',').replace(/[^\d,]/g, '');
+    const i = v.indexOf(',');
+    if (i !== -1) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/,/g, '');   // une seule virgule
+    if (v === avant) return;
+    const pos = input.selectionStart;
+    input.value = v;
+    const d = avant.length - v.length;
+    try { input.setSelectionRange(Math.max(0, pos - d), Math.max(0, pos - d)); }
+    catch { /* champ non sélectionnable */ }
+  });
+}
+
 const MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
 /** 'yyyy-MM-dd' → '26 juin' (chaîne vide si non parsable). */
 export function frDate(iso) {

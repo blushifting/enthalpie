@@ -19,7 +19,7 @@
 // Le lecteur ZXing-js (repli pour navigateurs sans BarcodeDetector, ex. iOS)
 // n'est pas embarqué pour l'instant : sur ces navigateurs on bascule sur la
 // saisie manuelle. Le point d'accroche est prêt (voir tryOtherDecoder_).
-import { h, clear, num, macroChips, toast } from './util.js';
+import { h, clear, num, numSaisie, parseNum, saisieDecimale, macroChips, toast } from './util.js';
 import { fetchOFF, ApiError } from './api.js';
 
 const EAN_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'];
@@ -209,12 +209,12 @@ export function openScan(ctx) {
     const stockIn = field_('Combien de paquets as-tu ?', 1, 'number',
       'À 0, le produit n\'apparaîtra pas dans « Mon stock ».');
 
-    const poidsVal = () => Number(poidsIn.input.value) || 0;
+    const poidsVal = () => poidsIn.valeur() || 0;
 
     const preview = h('div', { class: 'scan-preview' });
     function syncPreview() {
       const poids = poidsVal();
-      const paquets = Math.max(0, Number(stockIn.input.value) || 0);
+      const paquets = Math.max(0, stockIn.valeur() || 0);
       clear(preview);
 
       if (poids <= 0) {
@@ -226,8 +226,8 @@ export function openScan(ctx) {
       }
 
       const r = poids / 100;
-      const kcal = Math.round((Number(kcalIn.input.value) || 0) * r);
-      const prot = Math.round((Number(protIn.input.value) || 0) * r * 10) / 10;
+      const kcal = Math.round((kcalIn.valeur() || 0) * r);
+      const prot = Math.round((protIn.valeur() || 0) * r * 10) / 10;
       preview.append(
         h('div', { class: 'scan-preview__line' },
           'Un paquet entier = ', h('b', {}, `${num(kcal)} kcal`), ' · ',
@@ -275,17 +275,17 @@ export function openScan(ctx) {
         poidsIn.input.focus();
         return;
       }
-      const paquets = Math.max(0, Number(stockIn.input.value) || 0);
-      const fibres = fibresIn.input.value.trim();
+      const paquets = Math.max(0, stockIn.valeur() || 0);
+      const fibres = fibresIn.valeur();
       const produit = {
         nom, ean,
         marque_magasin: (fiche && fiche.marque) || '',
         // Le Sheet stocke tout POUR 100 g ; aucune conversion ici.
-        kcal_100g: Number(kcalIn.input.value) || 0,
-        prot_100g: Number(protIn.input.value) || 0,
+        kcal_100g: kcalIn.valeur() || 0,
+        prot_100g: protIn.valeur() || 0,
         // Vide (pas 0) si non renseigné : « sans fibres » et « inconnu » restent
         // distinguables — la jauge fibres additionne sans jamais estimer.
-        fibres_100g: fibres === '' ? '' : Number(fibres),
+        fibres_100g: fibres == null ? '' : fibres,
         poids_paquet_g: poids,
         flag_gluten: glutenBox.checked ? 'oui' : 'non',
         flag_lactose: lactoseBox.checked ? 'oui' : 'non',
@@ -438,13 +438,21 @@ function camReason_(err) {
 /* Petit champ de formulaire (label + input + hint)                    */
 /* ------------------------------------------------------------------ */
 function field_(label, value, type, hint) {
+  // `type: 'number'` demandé par l'appelant → champ TEXTE + clavier décimal :
+  // un input number rejette la virgule, seule touche décimale du clavier
+  // français, et la valeur lue devient vide sans que rien ne le signale.
+  // `saisieDecimale` accepte le point comme la virgule et écrit la virgule.
+  const numerique = type === 'number';
   const input = h('input', {
-    type: type || 'text', value: value == null ? '' : String(value),
+    type: numerique ? 'text' : (type || 'text'),
+    value: numerique ? numSaisie(value) : (value == null ? '' : String(value)),
     autocomplete: 'off', spellcheck: 'false',
-    inputmode: type === 'number' ? 'decimal' : undefined,
+    inputmode: numerique ? 'decimal' : undefined,
   });
+  if (numerique) saisieDecimale(input);
   const el = h('div', { class: 'field' },
     h('label', {}, label), input,
     hint ? h('div', { class: 'field__hint' }, hint) : null);
-  return { el, input };
+  // `valeur()` : nombre, ou null si le champ est vide (≠ 0).
+  return { el, input, valeur: () => (numerique ? parseNum(input.value) : input.value) };
 }

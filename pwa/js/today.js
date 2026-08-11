@@ -27,7 +27,20 @@ const CRANS_PAQUET = [0, 5, 10, 15, 17, 20, 25, 30, 33, 35, 40, 45, 50,
   55, 60, 65, 67, 70, 75, 80, 83, 85, 90, 95, 100];
 
 /* ---------- Jauges (apports du jour) ---------- */
-function gauge({ kind, label, unit, valeur, cible, ratio, fmt = num }) {
+function gauge({ kind, label, unit, valeur, cible, ratio, fmt = num, attente = false }) {
+  // `attente` : les chiffres du jour ne sont pas encore arrivés du backend (on
+  // affiche le stock en cache tout de suite). Un anneau vide et « … » disent
+  // qu'on ne sait pas encore — afficher les valeurs de la veille mentirait.
+  if (attente) {
+    return h('div', { class: `gauge gauge--${kind} is-attente` },
+      h('div', { class: 'gauge__ring' },
+        h('div', { html: `<svg viewBox="0 0 100 100" aria-hidden="true">
+          <circle class="gauge__track" cx="50" cy="50" r="${R}"></circle></svg>` }),
+        h('div', { class: 'gauge__center' }, h('span', { class: 'gauge__value' }, '…'))),
+      h('div', { class: 'gauge__label' }, label),
+      h('span', { class: 'gauge__badge' }, 'actualisation'));
+  }
+
   const isInfo = ratio == null;                     // réservé : jauge sans cible chiffrée
   const over = !isInfo && valeur > cible && cible > 0;
   const clamped = isInfo ? 0 : Math.max(0, Math.min(1, ratio || 0));
@@ -72,7 +85,7 @@ function avecRepli(j, repli) {
   return { valeur, cible, ratio: cible > 0 ? valeur / cible : null };
 }
 
-function gaugesRow(jauges) {
+function gaugesRow(jauges, attente = false) {
   // La jauge fibres est absente tant que le backend n'a pas été redéployé : on
   // ne la rend que si elle arrive, sinon l'app plante à froid entre les deux
   // déploiements (même garde-fou que `jours` dans bilan.js). Le repli porte sur
@@ -80,11 +93,11 @@ function gaugesRow(jauges) {
   // backend la connaît.
   const fib = jauges.fibres_g;
   return h('section', { class: 'gauges', 'aria-label': 'Apports du jour' },
-    gauge({ kind: 'prot', label: 'Protéines', unit: 'g', fmt: num,
+    gauge({ kind: 'prot', label: 'Protéines', unit: 'g', fmt: num, attente,
       valeur: jauges.prot_g.valeur, cible: jauges.prot_g.cible, ratio: jauges.prot_g.ratio }),
-    gauge({ kind: 'kcal', label: 'Calories', unit: 'kcal', fmt: numEntier,
+    gauge({ kind: 'kcal', label: 'Calories', unit: 'kcal', fmt: numEntier, attente,
       valeur: jauges.kcal.valeur, cible: jauges.kcal.cible, ratio: jauges.kcal.ratio }),
-    fib ? gauge({ kind: 'fibres', label: 'Fibres', unit: 'g', fmt: num,
+    fib ? gauge({ kind: 'fibres', label: 'Fibres', unit: 'g', fmt: num, attente,
       ...avecRepli(fib, REPLI_CIBLES.fibres_g) }) : null,
   );
 }
@@ -258,7 +271,9 @@ function validateBar(onValider, onAnnuler) {
 
 /* ---------- Bloc « Repas extérieur » ---------- */
 /** Logger un repas mangé dehors (resto, invitation) : ouvre la feuille de saisie
- *  (preset + curseurs kcal/prot). Compte dans les jauges, pas dans le stock. */
+ *  (preset + curseurs kcal/prot). Compte dans les jauges, pas dans le stock.
+ *  Placé JUSTE SOUS LES JAUGES depuis le 2026-08-11 : c'est une action fréquente,
+ *  et sous l'inventaire il fallait dérouler tout le stock pour l'atteindre. */
 function exterieurBlock(exterieurs, onExterieur) {
   const btn = h('button', { class: 'ext-card', type: 'button' },
     h('span', { class: 'ext-card__ico' }, '🍽️'),
@@ -268,7 +283,7 @@ function exterieurBlock(exterieurs, onExterieur) {
     h('span', { class: 'ext-card__go' }, '›'),
   );
   btn.addEventListener('click', () => openExterieur(exterieurs, onExterieur));
-  return h('section', { style: 'margin-top:22px' },
+  return h('section', { class: 'ext-section' },
     h('div', { class: 'list-head' }, h('span', {}, 'Manger dehors')),
     btn,
   );
@@ -289,7 +304,10 @@ export function renderToday(root, model, handlers) {
   }
 
   root.append(h('p', { class: 'day-caption' }, 'Apports du jour'));
-  root.append(gaugesRow(state.jauges));
+  root.append(gaugesRow(state.jauges, !!state.__attente));
+
+  // Manger dehors : au-dessus de l'inventaire, à portée de pouce.
+  root.append(exterieurBlock(exterieurs || [], handlers.onExterieur));
 
   // Aliments en stock, triés silencieusement par priorité du jour.
   const dispo = foods.filter((f) => (Number(f.stock) || 0) > 0);
@@ -333,6 +351,4 @@ export function renderToday(root, model, handlers) {
     }
     updateBar();
   }
-
-  root.append(exterieurBlock(exterieurs || [], handlers.onExterieur));
 }

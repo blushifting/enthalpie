@@ -6,7 +6,7 @@
 // classique, il ne peut pas importer ce module. L'écran Réglages affiche donc
 // les DEUX valeurs : si elles divergent, l'anomalie se voit au lieu de rester
 // silencieuse (typiquement : app-shell en cache plus vieux que le code chargé).
-export const APP_VERSION = 'v20';
+export const APP_VERSION = 'v21';
 
 // API_BASE du backend Apps Script déjà déployé (cf. BUILD-PWA.md §1).
 export const DEFAULT_API_BASE =
@@ -53,5 +53,4 @@ export const KEY = {
   exclus:  'enthalpie.courses.exclus',   // articles « ne plus proposer »
   last:    'enthalpie.courses.last',     // dernier lot validé (pour annuler)
   queue:   'enthalpie.queue',
-  filtre:  'enthalpie.stock.filtre',     // pastille de catégorie active, retenue entre deux visites
 };

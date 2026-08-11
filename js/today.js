@@ -7,7 +7,6 @@
 import { h, clear, num, numEntier, thumbOnlySlider } from './util.js';
 import { REPLI_CIBLES, CATEGORIES } from './config.js';
 import { normaliser } from './categories.js';
-import { store } from './store.js';
 import { openExterieur } from './exterieur.js';
 
 const R = 42;
@@ -317,17 +316,18 @@ function champRecherche(onChange) {
 /**
  * Pastilles de catégorie. N'affiche QUE les catégories réellement présentes
  * dans le stock : une pastille qui ne filtre rien est un piège à tap.
- * Le choix est retenu d'une visite à l'autre, et retombe sur « Tout » si la
- * catégorie mémorisée a disparu du stock (dernier paquet fini).
+ *
+ * Le filtre N'EST PAS mémorisé (demande d'Azur du 2026-08-11) : chaque ouverture
+ * repart de « Tout ». Un filtre persistant fait rouvrir l'app sur un stock
+ * amputé sans qu'on se souvienne pourquoi — l'inventaire complet est le seul
+ * état par défaut qui ne cache rien.
  */
 function filtreBar(foods, onPick) {
   const presentes = new Set(foods.map(categorieDe));
   const dispo = CATEGORIES.filter((c) => presentes.has(c.id));
   const nonRanges = presentes.has('');
 
-  let actif = store.getFiltre();
-  const valide = (actif === '') || dispo.some((c) => c.id === actif) || (actif === '_vide' && nonRanges);
-  if (!valide) { actif = ''; store.setFiltre(''); }
+  let actif = '';
 
   const el = h('div', { class: 'inv-filtres', role: 'group', 'aria-label': 'Filtrer par rangement' });
   const boutons = [];
@@ -337,8 +337,9 @@ function filtreBar(foods, onPick) {
       'aria-pressed': id === actif ? 'true' : 'false',
     }, texte);
     b.addEventListener('click', () => {
-      actif = id;
-      store.setFiltre(id);
+      // Re-taper la pastille active revient à « Tout » : sortir d'un filtre ne
+      // doit pas obliger à viser une autre pastille.
+      actif = (id === actif && id !== '') ? '' : id;
       boutons.forEach(({ id: i, b: btn }) => {
         btn.classList.toggle('is-on', i === actif);
         btn.setAttribute('aria-pressed', i === actif ? 'true' : 'false');

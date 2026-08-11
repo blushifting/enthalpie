@@ -659,6 +659,13 @@ function versionBlock() {
   const shellEl = h('b', {}, '…');
   const etat = h('div', { class: 'field__hint' }, 'Contrôle de la version…');
   const btn = h('button', { class: 'btn btn--ghost', type: 'button' }, 'Chercher une mise à jour');
+  // Le cas « cache à jour, page pas rechargée » est le plus courant des deux et
+  // le plus déroutant : la mise à jour EST là, elle attend juste un
+  // rechargement. Constater la divergence ne suffisait pas — Azur a passé deux
+  // échanges à croire à un bug de filtres alors qu'il tournait sur l'ancienne
+  // page (2026-08-11). Le bouton est donc l'action, pas la note de bas de page.
+  const recharger = h('button', { class: 'btn btn--primary', type: 'button', hidden: true,
+    onclick: () => location.reload() }, 'Recharger l’app maintenant');
 
   versionAppShell().then((shell) => {
     if (shell == null) {
@@ -667,10 +674,13 @@ function versionBlock() {
       return;
     }
     shellEl.textContent = shell;
-    etat.textContent = shell === APP_VERSION
-      ? 'Code et app-shell en cache sont sur la même version.'
-      : `⚠ Le code chargé est en ${APP_VERSION} et l'app-shell en cache en ${shell} : `
-        + 'relance l’app, ou force le contrôle ci-dessous.';
+    if (shell === APP_VERSION) {
+      etat.textContent = 'Code et app-shell en cache sont sur la même version.';
+      return;
+    }
+    etat.textContent = `⚠ La page ouverte tourne en ${APP_VERSION}, alors que la version `
+      + `${shell} est déjà en cache. Recharge pour l’utiliser.`;
+    recharger.hidden = false;
   });
 
   btn.addEventListener('click', async () => {
@@ -691,6 +701,7 @@ function versionBlock() {
       h('span', {}, 'code ', h('b', {}, APP_VERSION)),
       h('span', {}, 'app-shell ', shellEl)),
     etat,
+    recharger,
     btn,
   );
 }
@@ -751,12 +762,38 @@ function openSettings({ force = false } = {}) {
 /* ------------------------------------------------------------------ */
 /** Affiché quand une nouvelle version du SW attend de prendre la main. */
 function showUpdatePopin(reg) {
+  popinMaj('Une nouvelle version est prête.', () => applyUpdate(reg));
+}
+
+/**
+ * Cas vécu le 2026-08-11 : le cache portait déjà la v20 pendant que la page
+ * ouverte tournait en v19. La mise à jour était là — installée, activée — mais
+ * aucun service worker n'attendait, donc aucun popin ne s'affichait, et l'app
+ * continuait d'exécuter l'ancien code. Deux échanges à chercher un bug de
+ * filtres qui était en réalité déjà corrigé.
+ *
+ * On compare donc aussi les NUMÉROS au démarrage. Un shell plus ANCIEN que le
+ * code est l'inverse (installation en cours) : transitoire, on se tait.
+ */
+async function verifierVersionPage() {
+  const numero = (v) => {
+    const tous = String(v || '').match(/v(\d+)/g);
+    return tous ? Math.max(...tous.map((x) => Number(x.slice(1)))) : null;
+  };
+  const enCache = numero(await versionAppShell());
+  const chargee = numero(APP_VERSION);
+  if (enCache == null || chargee == null || enCache <= chargee) return;
+  popinMaj('Elle est déjà téléchargée : recharge pour l’utiliser.', () => location.reload());
+}
+
+/** Bandeau « Mise à jour disponible » — le bouton fait ce qu'on lui passe. */
+function popinMaj(sous, action) {
   if (document.querySelector('.update-popin')) return;      // déjà proposé
   const btn = h('button', { class: 'update-popin__btn', type: 'button' }, 'Recharger');
   btn.onclick = () => {
     btn.disabled = true;
     btn.textContent = '…';
-    applyUpdate(reg);                                        // → bascule → rechargement auto
+    action();
   };
   const plusTard = h('button', {
     class: 'update-popin__close', type: 'button', 'aria-label': 'Plus tard',
@@ -767,7 +804,7 @@ function showUpdatePopin(reg) {
     h('span', { class: 'update-popin__ico', 'aria-hidden': 'true' }, '✨'),
     h('div', { class: 'update-popin__txt' },
       h('div', { class: 'update-popin__title' }, 'Mise à jour disponible'),
-      h('div', { class: 'update-popin__sub' }, 'Une nouvelle version est prête.')),
+      h('div', { class: 'update-popin__sub' }, sous)),
     btn, plusTard);
 
   document.body.append(el);
@@ -819,3 +856,4 @@ updateQueueBadge();
 registerServiceWorker(showUpdatePopin);
 setScreen('today');
 syncQueue({ silent: true });
+verifierVersionPage();     // cache plus récent que la page ouverte → propose le rechargement

@@ -49,6 +49,16 @@
 
 * { box-sizing: border-box; }
 
+/* ⚠️ RÈGLE À NE PAS RETIRER — elle évite un bug qui s'est produit TROIS fois.
+   `[hidden] { display: none }` vient de la feuille du navigateur : n'importe
+   quelle règle d'auteur posant un `display` sur la même classe l'emporte, et
+   `el.hidden = true` n'a alors plus aucun effet visible. C'est arrivé à `.fab`
+   (2026-07-09), à `.inv-row` — les filtres du stock ne masquaient rien
+   (2026-08-11) — puis au bouton de rechargement des Réglages le même jour.
+   Une règle d'auteur globale règle la classe entière de bugs, au lieu d'ajouter
+   un `.machin[hidden]` après chaque incident. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -86,7 +96,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   position: fixed; top: var(--safe-top); left: 0; right: 0;
   height: 2px; z-index: 30; overflow: hidden; pointer-events: none;
 }
-.syncbar[hidden] { display: none; }
 .syncbar span {
   display: block; width: 40%; height: 100%;
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
@@ -116,7 +125,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   color: var(--accent); font-size: 13px; font-weight: 650;
   transition: background .12s ease;
 }
-.queue-badge[hidden] { display: none; }
 .queue-badge:active { background: color-mix(in srgb, var(--accent) 24%, var(--surface)); }
 .queue-badge__ico { font-size: 15px; }
 /* Hors-ligne : la file ne part pas maintenant → teinte d'attente (ambre) */
@@ -256,8 +264,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .fab:active { filter: brightness(.94); }
 .fab__icon { font-size: 16px; }
-/* [hidden] seul ne suffit pas : .fab pose display:flex → règle plus spécifique. */
-.fab[hidden] { display: none; }
 
 /* ---------- Tabbar ---------- */
 .tabbar {
@@ -424,9 +430,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   border-radius: var(--radius-sm); padding: 12px 14px 14px;
   transition: border-color .15s ease, background .15s ease;
 }
-/* Même piège que .fab : `display: flex` posé ici l'emporte sur le `[hidden]`
-   de la feuille du navigateur, et les lignes filtrées restaient visibles. */
-.inv-row[hidden] { display: none; }
 .inv-row__top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .inv-row__nom { font-size: 15px; font-weight: 600; line-height: 1.25; min-width: 0; }
 .inv-row__level {
@@ -450,7 +453,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   align-self: flex-start; font-size: 12px; font-weight: 600;
   padding: 4px 11px; border-radius: 999px; margin-top: 2px;
 }
-.inv-row__delta[hidden] { display: none; }
 /* Vert « ok » et non la couleur des protéines : ce badge dit « c'est compté »,
    il ne représente aucune macro en particulier (il porte kcal ET prot). */
 .inv-row__delta.is-eat { background: color-mix(in srgb, var(--ok) 20%, var(--surface)); color: var(--ok); }
@@ -485,7 +487,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   border-top: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
   box-shadow: 0 -8px 24px rgba(0,0,0,.4);
 }
-.valbar[hidden] { display: none; }
 .valbar__info { display: flex; align-items: center; gap: 9px; font-size: 13.5px; font-weight: 600; }
 .valbar__dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
 .valbar__actions { display: flex; gap: 8px; }
@@ -761,7 +762,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   padding-bottom: 2px;
 }
 .inv-filtres::-webkit-scrollbar { display: none; }
-.inv-filtres[hidden] { display: none; }
 .inv-filtre {
   flex: 0 0 auto; white-space: nowrap;
   background: var(--surface); border: 1px solid var(--line); color: var(--txt-muted);
@@ -775,7 +775,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   color: var(--txt-dim); font-size: 11px; text-transform: uppercase;
   letter-spacing: .6px; font-weight: 600; margin: 6px 2px 4px;
 }
-.inv-group[hidden] { display: none; }
 
 .ranger-cta {
   width: 100%; display: flex; align-items: center; justify-content: space-between;
@@ -850,7 +849,6 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--txt-muted);
   background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px;
 }
-.recipe-card__steps[hidden] { display: none; }
 .recipe-card__cta {
   min-height: 50px; border: 0; border-radius: 12px; background: var(--accent); color: #0b1020;
   font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px;

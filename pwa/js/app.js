@@ -16,13 +16,14 @@ import { renderBilan } from './bilan.js';
  * appelés à plusieurs endroits, y compris depuis des chemins qui repeignent
  * après une réponse réseau, et rendre ces appels asynchrones ouvrirait une
  * question d'ordre de peinture pour économiser quelques kilo-octets. */
+import { flushQueue, updateQueueBadge, registerServiceWorker, applyUpdate, versionAppShell, chercherMiseAJour } from './sync.js';
+import { DEFAULT_API_BASE, APP_VERSION } from './config.js';
+
 const modules = {};
 function charger(nom) {
   if (!modules[nom]) modules[nom] = import(`./${nom}.js`);
   return modules[nom];
 }
-import { flushQueue, updateQueueBadge, registerServiceWorker, applyUpdate, versionAppShell, chercherMiseAJour } from './sync.js';
-import { DEFAULT_API_BASE, APP_VERSION } from './config.js';
 
 const appEl = $('#app');
 const sheetRoot = $('#sheet-root');
@@ -167,18 +168,54 @@ function buildModel(state, catalog) {
 /* ------------------------------------------------------------------ */
 /* Navigation                                                          */
 /* ------------------------------------------------------------------ */
+// Ordre de la barre du bas : il donne le SENS du glissement. Aller vers Bilan
+// pousse vers la gauche, revenir vers Aujourd'hui ramène vers la droite — le
+// mouvement dit où l'on est allé, ce qu'un fondu ne raconte pas.
+const ORDRE_ECRANS = ['today', 'courses', 'cuisine', 'bilan'];
+
 function setScreen(name) {
+  if (name === currentScreen) { window.scrollTo(0, 0); refreshCurrent(); return; }
+  const avant = ORDRE_ECRANS.indexOf(name) > ORDRE_ECRANS.indexOf(currentScreen);
   currentScreen = name;
-  document.querySelectorAll('.tab').forEach((t) =>
-    t.classList.toggle('is-active', t.dataset.screen === name));
-  fab.hidden = name !== 'today';
-  const render = {
-    today: renderTodayScreen,
-    courses: renderCoursesScreen,
-    cuisine: renderCuisineScreen,
-    bilan: renderBilanScreen,
-  }[name] || renderTodayScreen;
-  render();
+
+  const appliquer = () => {
+    document.querySelectorAll('.tab').forEach((t) =>
+      t.classList.toggle('is-active', t.dataset.screen === name));
+    fab.hidden = name !== 'today';
+    window.scrollTo(0, 0);               // on arrive en haut d'un écran, pas au milieu
+    const render = {
+      today: renderTodayScreen,
+      courses: renderCoursesScreen,
+      cuisine: renderCuisineScreen,
+      bilan: renderBilanScreen,
+    }[name] || renderTodayScreen;
+    // Volontairement SANS `return` : les fonctions d'écran sont asynchrones, et
+    // rendre leur promesse ferait attendre la transition jusqu'à la réponse du
+    // serveur — soit, un jour sur trois, une trentaine de secondes d'écran figé.
+    // Leur partie synchrone (peinture depuis le cache, ou squelette) suffit, et
+    // c'est justement l'image que la transition doit capturer.
+    render();
+  };
+
+  // View Transitions : le navigateur photographie l'écran avant et après, et
+  // fait le fondu-glissé lui-même. C'est fait pour exactement ce cas — une app
+  // qui repeint tout son contenu d'un coup. Absente (Firefox, vieux Safari) ou
+  // refusée par l'appareil : on applique directement, sans rien casser.
+  if (!document.startViewTransition || estSobre() || document.hidden) { appliquer(); return; }
+  document.documentElement.dataset.sens = avant ? 'avant' : 'arriere';
+  const vt = document.startViewTransition(appliquer);
+  // Une transition abandonnée rejette `ready` et `finished`. Ça arrive
+  // normalement — deux taps rapides sur la barre du bas, ou une page qui ne
+  // peint pas (app en arrière-plan). Le changement d'écran a lieu quand même,
+  // via le callback : seule l'animation saute. Sans ces `catch`, chaque
+  // occurrence remonte en « Uncaught (in promise) » dans la console.
+  vt.ready.catch(() => {});
+  vt.finished.catch(() => {});
+}
+
+/** L'appareil demande qu'on limite les animations. */
+function estSobre() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 /* ------------------------------------------------------------------ */
@@ -282,7 +319,7 @@ async function renderTodayScreen() {
       // jauges non — hors-ligne on ne peut plus les mettre à jour, alors on les
       // laisse en attente plutôt que de dater les apports de la veille.
       CatalogData = cc.catalog;
-      M = buildModel({ ...cs.state, __offline: true, __attente: cs.state.date !== isoLocal() }, cc.catalog);
+      M = buildModel({ ...cs.state, __offline: causeCache(err), __attente: cs.state.date !== isoLocal() }, cc.catalog);
       paint();
       toast(err instanceof ApiError && err.enLigne === false
         ? 'Hors-ligne — données du dernier chargement'
@@ -311,6 +348,16 @@ function describeError(err) {
     case 'http':    return `Le serveur a renvoyé une erreur (${err.message}).`;
     default:        return err.message;
   }
+}
+
+/**
+ * Pourquoi on retombe sur le cache : `'reseau'` (vraiment déconnecté) ou
+ * `'serveur'` (Apps Script n'a pas répondu dans les temps). Le bandeau des
+ * écrans le dit tel quel — annoncer « Hors-ligne » à quelqu'un de connecté
+ * l'envoie chercher une panne qui n'existe pas.
+ */
+function causeCache(err) {
+  return err instanceof ApiError && err.enLigne === false ? 'reseau' : 'serveur';
 }
 
 /** Formulation d'une mise en file : « hors-ligne » n'est vrai que si on l'est. */
@@ -369,7 +416,7 @@ async function renderCoursesScreen() {
   } catch (err) {
     const cc = store.getCachedCourses();
     if (cc && cc.courses) {
-      if (currentScreen === 'courses') renderCourses(appEl, { ...cc.courses, __offline: true }, coursesHandlers);
+      if (currentScreen === 'courses') renderCourses(appEl, { ...cc.courses, __offline: causeCache(err) }, coursesHandlers);
     } else if (err instanceof ApiError && err.kind === 'noauth') {
       openSettings({ force: true });
     } else if (currentScreen === 'courses') {
@@ -472,7 +519,7 @@ async function renderCuisineScreen() {
     const cc = store.getCachedCuisine();
     if (cc && cc.cuisine) {
       CuisineData = cc.cuisine;
-      if (currentScreen === 'cuisine') renderCuisine(appEl, { ...cc.cuisine, __offline: true }, cuisineHandlers);
+      if (currentScreen === 'cuisine') renderCuisine(appEl, { ...cc.cuisine, __offline: causeCache(err) }, cuisineHandlers);
     } else if (err instanceof ApiError && err.kind === 'noauth') {
       openSettings({ force: true });
     } else if (currentScreen === 'cuisine') {
@@ -546,7 +593,7 @@ async function renderBilanScreen() {
   } catch (err) {
     const cb = store.getCachedBilan();
     if (cb && cb.bilan) {
-      if (currentScreen === 'bilan') renderBilan(appEl, { ...cb.bilan, __offline: true });
+      if (currentScreen === 'bilan') renderBilan(appEl, { ...cb.bilan, __offline: causeCache(err) });
     } else if (err instanceof ApiError && err.kind === 'noauth') {
       openSettings({ force: true });
     } else if (currentScreen === 'bilan') {

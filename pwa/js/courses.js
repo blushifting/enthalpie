@@ -10,7 +10,7 @@
 // - « ✕ » sur une ligne auto = masquage local (« ne plus proposer »), réversible
 //   depuis la section « Articles retirés » ;
 // - un bandeau permet d'annuler le dernier lot validé.
-import { h, clear, num } from './util.js';
+import { h, clear, num, bandeauCache } from './util.js';
 import { store } from './store.js';
 
 /**
@@ -33,7 +33,7 @@ export function renderCourses(root, data, handlers) {
   clear(root);
 
   if (courses.__offline) {
-    root.append(h('div', { class: 'offline-banner' }, '⚡ Hors-ligne — dernière liste connue'));
+    root.append(bandeauCache(courses.__offline, 'dernière liste connue'));
   }
 
   root.append(h('p', { class: 'day-caption' }, 'Liste de courses'));

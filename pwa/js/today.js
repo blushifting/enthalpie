@@ -11,7 +11,7 @@
 // lot part en file (hors-ligne), elles restent gelées avec le stock du serveur
 // et un badge « en attente ». Empiler une saisie sur un état local non
 // synchronisé était la cause des quantités comptées deux fois.
-import { h, clear, num, numEntier, thumbOnlySlider } from './util.js';
+import { h, clear, num, numEntier, thumbOnlySlider, bandeauCache } from './util.js';
 import { REPLI_CIBLES, CATEGORIES } from './config.js';
 import { normaliser } from './categories.js';
 import { openExterieur } from './exterieur.js';
@@ -34,50 +34,145 @@ const CRANS_PAQUET = [0, 5, 10, 15, 17, 20, 25, 30, 33, 35, 40, 45, 50,
   55, 60, 65, 67, 70, 75, 80, 83, 85, 90, 95, 100];
 
 /* ---------- Jauges (apports du jour) ---------- */
-function gauge({ kind, label, unit, valeur, cible, ratio, fmt = num, attente = false }) {
-  // `attente` : les chiffres du jour ne sont pas encore arrivés du backend (on
-  // affiche le stock en cache tout de suite). Un anneau vide et « … » disent
-  // qu'on ne sait pas encore — afficher les valeurs de la veille mentirait.
-  if (attente) {
-    return h('div', { class: `gauge gauge--${kind} is-attente` },
-      h('div', { class: 'gauge__ring' },
-        h('div', { html: `<svg viewBox="0 0 100 100" aria-hidden="true">
-          <circle class="gauge__track" cx="50" cy="50" r="${R}"></circle></svg>` }),
-        h('div', { class: 'gauge__center' }, h('span', { class: 'gauge__value' }, '…'))),
-      h('div', { class: 'gauge__label' }, label),
-      h('span', { class: 'gauge__badge' }, 'actualisation'));
-  }
 
-  const isInfo = ratio == null;                     // réservé : jauge sans cible chiffrée
-  const over = !isInfo && valeur > cible && cible > 0;
-  const clamped = isInfo ? 0 : Math.max(0, Math.min(1, ratio || 0));
-  const offset = C * (1 - clamped);
-  const pct = isInfo ? null : Math.round((ratio || 0) * 100);
+const NS_SVG = 'http://www.w3.org/2000/svg';
+function svgEl(nom, attrs) {
+  const el = document.createElementNS(NS_SVG, nom);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+  return el;
+}
 
-  const svg = `
-    <svg viewBox="0 0 100 100" aria-hidden="true">
-      <circle class="gauge__track" cx="50" cy="50" r="${R}"></circle>
-      ${isInfo ? '' :
-        `<circle class="gauge__fill ${over ? 'is-over' : ''}" cx="50" cy="50" r="${R}"
-          stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}"></circle>`}
-    </svg>`;
+/** L'app est censée bouger, pas gigoter : tout ce qui s'anime ici se coupe. */
+const sobre = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  const badge = isInfo
-    ? h('span', { class: 'gauge__badge' }, 'informatif')
-    : h('span', { class: `gauge__badge ${over ? 'is-over' : pct >= 90 ? 'is-ok' : ''}` },
-        over ? `+${fmt(valeur - cible)} ${unit}` : `${pct} %`);
+const DUREE_COMPTEUR = 560;
 
-  return h('div', { class: `gauge gauge--${kind}` },
+/**
+ * Une jauge, construite UNE fois et mise à jour en place par `maj()`.
+ *
+ * C'est le point clé de l'animation (2026-08-13). La transition CSS sur
+ * `stroke-dashoffset` existait depuis le début, mais ne s'est jamais jouée :
+ * `renderToday` vide et reconstruit tout l'écran à chaque peinture, et un
+ * cercle SVG créé à l'instant naît déjà à sa valeur finale — il n'y a rien
+ * entre quoi et quoi transitionner. La section de jauges est donc désormais
+ * conservée d'une peinture à l'autre (cf. `renderToday`), et seules ses valeurs
+ * changent : l'anneau se remplit, le nombre défile.
+ */
+function gauge({ kind, label, unit, fmt = num }) {
+  const track = svgEl('circle', { class: 'gauge__track', cx: 50, cy: 50, r: R });
+  const fill = svgEl('circle', {
+    class: 'gauge__fill', cx: 50, cy: 50, r: R,
+    'stroke-dasharray': C.toFixed(1), 'stroke-dashoffset': C.toFixed(1),
+  });
+  const svg = svgEl('svg', { viewBox: '0 0 100 100', 'aria-hidden': 'true' });
+  svg.append(track, fill);
+
+  const valueEl = h('span', { class: 'gauge__value' }, '…');
+  const targetEl = h('span', { class: 'gauge__target' });
+  const badge = h('span', { class: 'gauge__badge' });
+  const el = h('div', { class: `gauge gauge--${kind}` },
     h('div', { class: 'gauge__ring' },
-      h('div', { html: svg }),
-      h('div', { class: 'gauge__center' },
-        h('span', { class: 'gauge__value' }, fmt(valeur)),
-        h('span', { class: 'gauge__target' }, isInfo ? unit : `/ ${fmt(cible)} ${unit}`),
-      ),
-    ),
+      svg,
+      h('div', { class: 'gauge__center' }, valueEl, targetEl)),
     h('div', { class: 'gauge__label' }, label),
     badge,
   );
+
+  let affichee = null;      // valeur au compteur, pour repartir d'où il en est
+  let ratioVu = null;       // dernier ratio peint, pour détecter le franchissement
+  let anim = 0;
+  let secours = 0;
+
+  const poser = (v) => { affichee = v; valueEl.textContent = fmt(v); };
+
+  /** Compteur : le nombre rejoint sa cible au lieu de sauter. Même durée que
+   *  l'anneau, pour qu'ils arrivent ensemble. */
+  function compter(vers) {
+    cancelAnimationFrame(anim);
+    clearTimeout(secours);
+    // Premier affichage ou appareil sobre : on pose la valeur, sans détour.
+    if (affichee == null || sobre()) { poser(vers); return; }
+    const depart = affichee;
+    if (Math.abs(vers - depart) < 0.05) { poser(vers); return; }
+
+    // Filet : `requestAnimationFrame` ne se déclenche pas quand la page n'est
+    // pas peinte (app passée en arrière-plan, écran verrouillé pendant la
+    // validation). Sans lui, le nombre resterait figé sur l'ancienne valeur —
+    // un chiffre faux, pas seulement une animation manquée.
+    secours = setTimeout(() => { cancelAnimationFrame(anim); poser(vers); }, DUREE_COMPTEUR + 150);
+
+    const t0 = performance.now();
+    const pas = (t) => {
+      const k = Math.min(1, (t - t0) / DUREE_COMPTEUR);
+      const e = 1 - Math.pow(1 - k, 3);                 // easeOutCubic, comme l'anneau
+      affichee = depart + (vers - depart) * e;
+      valueEl.textContent = fmt(affichee);
+      if (k < 1) { anim = requestAnimationFrame(pas); return; }
+      clearTimeout(secours);
+      poser(vers);
+    };
+    anim = requestAnimationFrame(pas);
+  }
+
+  /**
+   * @param etat { valeur, cible, ratio, attente, projection }
+   * `projection` : la valeur n'est pas encore confirmée par le serveur — elle
+   * est calculée depuis les macros qu'on a sous la main pendant l'aller-retour.
+   * L'anneau y va quand même, en teinte atténuée, et se cale sur la réponse.
+   */
+  function maj(etat) {
+    const { attente = false, projection = false } = etat || {};
+    el.classList.toggle('is-attente', attente);
+    el.classList.toggle('is-projection', !attente && projection);
+
+    if (attente) {
+      // Les chiffres du jour ne sont pas encore arrivés (le stock en cache est
+      // déjà à l'écran). Anneau vide et « … » : afficher ceux de la veille
+      // serait un mensonge, et le compteur repartira de la vraie valeur.
+      cancelAnimationFrame(anim);
+      affichee = null;
+      valueEl.textContent = '…';
+      targetEl.textContent = '';
+      fill.setAttribute('stroke-dashoffset', C.toFixed(1));
+      fill.style.display = 'none';
+      badge.className = 'gauge__badge';
+      badge.textContent = 'actualisation';
+      ratioVu = null;
+      return;
+    }
+
+    const valeur = Number(etat.valeur) || 0;
+    const cible = Number(etat.cible) || 0;
+    const ratio = etat.ratio;
+    const isInfo = ratio == null;                     // réservé : jauge sans cible chiffrée
+    const over = !isInfo && valeur > cible && cible > 0;
+    const borne = isInfo ? 0 : Math.max(0, Math.min(1, ratio || 0));
+
+    fill.style.display = isInfo ? 'none' : '';
+    fill.classList.toggle('is-over', over);
+    fill.setAttribute('stroke-dashoffset', (C * (1 - borne)).toFixed(1));
+
+    compter(valeur);
+    targetEl.textContent = isInfo ? unit : `/ ${fmt(cible)} ${unit}`;
+
+    const pct = isInfo ? null : Math.round((ratio || 0) * 100);
+    badge.className = `gauge__badge ${isInfo ? '' : over ? 'is-over' : pct >= 90 ? 'is-ok' : ''}`;
+    badge.textContent = isInfo ? 'informatif'
+      : over ? `+${fmt(valeur - cible)} ${unit}` : `${pct} %`;
+
+    // Franchissement de la cible : une pulsation, une seule fois, au moment où
+    // ça arrive. C'est le seul instant de la journée qui mérite d'être souligné.
+    if (!isInfo && !sobre() && ratioVu != null && ratioVu < 1 && (ratio || 0) >= 1) {
+      el.classList.remove('is-atteinte');
+      void el.offsetWidth;                            // relance l'animation
+      el.classList.add('is-atteinte');
+      setTimeout(() => el.classList.remove('is-atteinte'), 900);
+    }
+    ratioVu = ratio;
+  }
+
+  el.maj = maj;
+  return el;
 }
 
 /**
@@ -92,21 +187,73 @@ function avecRepli(j, repli) {
   return { valeur, cible, ratio: cible > 0 ? valeur / cible : null };
 }
 
-function gaugesRow(jauges, attente = false) {
-  // La jauge fibres est absente tant que le backend n'a pas été redéployé : on
-  // ne la rend que si elle arrive, sinon l'app plante à froid entre les deux
-  // déploiements (même garde-fou que `jours` dans bilan.js). Le repli porte sur
-  // la CIBLE manquante, jamais sur la valeur consommée — celle-là, seul le
-  // backend la connaît.
-  const fib = jauges.fibres_g;
-  return h('section', { class: 'gauges', 'aria-label': 'Apports du jour' },
-    gauge({ kind: 'prot', label: 'Protéines', unit: 'g', fmt: num, attente,
-      valeur: jauges.prot_g.valeur, cible: jauges.prot_g.cible, ratio: jauges.prot_g.ratio }),
-    gauge({ kind: 'kcal', label: 'Calories', unit: 'kcal', fmt: numEntier, attente,
-      valeur: jauges.kcal.valeur, cible: jauges.kcal.cible, ratio: jauges.kcal.ratio }),
-    fib ? gauge({ kind: 'fibres', label: 'Fibres', unit: 'g', fmt: num, attente,
-      ...avecRepli(fib, REPLI_CIBLES.fibres_g) }) : null,
-  );
+/**
+ * Section des trois jauges, construite une fois puis mise à jour en place.
+ * Elle expose `maj(jauges, {attente, ajout})` :
+ *  - `attente` : les apports du jour ne sont pas encore connus ;
+ *  - `ajout`   : {kcal, prot_g, fibres_g} à AJOUTER aux valeurs du serveur —
+ *    c'est la projection affichée pendant l'aller-retour d'une validation.
+ */
+function gaugesRow() {
+  const el = h('section', { class: 'gauges', 'aria-label': 'Apports du jour' });
+  const jaugesEl = {
+    prot_g: gauge({ kind: 'prot', label: 'Protéines', unit: 'g', fmt: num }),
+    kcal: gauge({ kind: 'kcal', label: 'Calories', unit: 'kcal', fmt: numEntier }),
+    fibres_g: gauge({ kind: 'fibres', label: 'Fibres', unit: 'g', fmt: num }),
+  };
+  el.append(jaugesEl.prot_g, jaugesEl.kcal, jaugesEl.fibres_g);
+
+  el.maj = (jauges, { attente = false, ajout = null } = {}) => {
+    const projection = !!ajout;
+    const ajuste = (j, cle, repli) => {
+      const base = repli != null ? avecRepli(j, repli)
+        : { valeur: Number(j.valeur) || 0, cible: Number(j.cible) || 0, ratio: j.ratio };
+      if (!ajout) return base;
+      // Une correction ne peut pas descendre sous zéro, et le serveur ne
+      // renverra jamais mieux : plafonner ici évite un anneau négatif le temps
+      // de l'aller-retour.
+      const valeur = Math.max(0, base.valeur + (Number(ajout[cle]) || 0));
+      return { valeur, cible: base.cible,
+        ratio: base.cible > 0 ? valeur / base.cible : base.ratio };
+    };
+
+    jaugesEl.prot_g.maj({ ...ajuste(jauges.prot_g, 'prot_g'), attente, projection });
+    jaugesEl.kcal.maj({ ...ajuste(jauges.kcal, 'kcal'), attente, projection });
+    // La jauge fibres est absente tant que le backend n'a pas été redéployé : on
+    // ne la montre que si elle arrive, sinon l'app plante à froid entre les deux
+    // déploiements (même garde-fou que `jours` dans bilan.js). Le repli porte
+    // sur la CIBLE manquante, jamais sur la valeur consommée — celle-là, seul
+    // le backend la connaît.
+    const fib = jauges.fibres_g;
+    jaugesEl.fibres_g.hidden = !fib;
+    if (fib) jaugesEl.fibres_g.maj({
+      ...ajuste(fib, 'fibres_g', REPLI_CIBLES.fibres_g), attente, projection });
+  };
+
+  return el;
+}
+
+/** Ramène en haut de page, là où sont les jauges. Glissé, sauf si l'appareil
+ *  demande la sobriété — auquel cas le saut est immédiat, pas absent. */
+function remonter() {
+  try { window.scrollTo({ top: 0, behavior: sobre() ? 'auto' : 'smooth' }); }
+  catch { window.scrollTo(0, 0); }        // vieux Safari : pas d'objet d'options
+}
+
+/** Apports d'un lot de curseurs, depuis les macros déjà en mémoire : c'est
+ *  exactement ce que le backend recalculera (macros /100 g × grammes / 100). */
+function projeter(changes) {
+  const somme = { kcal: 0, prot_g: 0, fibres_g: 0 };
+  (changes || []).forEach((c) => {
+    const m = (c && c.macros) || {};
+    const f = (Number(c && c.delta) || 0) / 100;
+    somme.kcal += (Number(m.kcal) || 0) * f;
+    somme.prot_g += (Number(m.prot_g) || 0) * f;
+    // `|| 0` : un aliment sans donnée de fibres ne fait pas bouger sa jauge,
+    // exactement comme côté serveur (skill nutrition §6).
+    somme.fibres_g += (Number(m.fibres_g) || 0) * f;
+  });
+  return somme;
 }
 
 /* ---------- Résumé du jour ---------- */
@@ -178,7 +325,7 @@ export function macroDominante(macros) {
  * Le ✕ n'ouvre pas de confirmation : pour un aliment, il rend la quantité au
  * stock et retire les apports du jour — c'est le curseur reculé, en un tap.
  */
-function journalBlock(state, onSupprimer) {
+function journalBlock(state, onSupprimer, dejaVus) {
   const entrees = Array.isArray(state.journal) ? state.journal : null;
   // Backend pas encore redéployé : pas de `journal` du tout. On ne montre alors
   // rien plutôt qu'une section vide qui laisserait croire à une journée blanche.
@@ -217,7 +364,11 @@ function journalBlock(state, onSupprimer) {
       class: 'jrn__x', type: 'button',
       'aria-label': `Retirer ${e.nom} du journal du jour`,
     }, '✕');
-    const row = h('div', { class: `jrn__row ${ext ? 'is-ext' : ''}` },
+    // Entrée qui n'était pas là à la peinture précédente : elle se signale une
+    // fois. C'est la réponse à « qu'est-ce que je viens de compter ? », posée
+    // juste après une validation, quand la liste s'est réordonnée.
+    const nouvelle = dejaVus && !dejaVus.has(String(e.id));
+    const row = h('div', { class: `jrn__row ${ext ? 'is-ext' : ''} ${nouvelle ? 'is-neuve' : ''}` },
       h('span', { class: 'jrn__nom' }, ext ? `Repas extérieur${e.nom && e.nom !== 'Repas extérieur' ? ` · ${e.nom}` : ''}` : e.nom),
       h('span', { class: 'jrn__pct' }, mesure),
       x);
@@ -226,10 +377,12 @@ function journalBlock(state, onSupprimer) {
       // et la seconde retirerait le repas suivant (le rang aurait glissé).
       if (x.disabled) return;
       x.disabled = true;
-      row.classList.add('is-envoi');
+      // La ligne se replie pendant l'envoi au lieu de disparaître d'un coup à la
+      // repeinture : on voit ce qu'on vient de retirer partir.
+      row.classList.add('is-envoi', 'is-partante');
       Promise.resolve(onSupprimer(e)).catch(() => {
         x.disabled = false;
-        row.classList.remove('is-envoi');
+        row.classList.remove('is-envoi', 'is-partante');
       });
     });
     liste.append(row);
@@ -439,7 +592,11 @@ function validateBar(onValider, onAnnuler) {
   const count = h('span', { class: 'valbar__count' });
   const annuler = h('button', { class: 'valbar__annuler', type: 'button', onclick: onAnnuler }, 'Annuler');
   const valider = h('button', { class: 'valbar__valider', type: 'button', onclick: onValider }, 'Valider');
-  const bar = h('div', { class: 'valbar', hidden: true },
+  // Pilotée par une CLASSE et non par `hidden` : `[hidden]{display:none}` sort
+  // l'élément du flux d'un coup, et rien ne peut plus s'animer. Avec une classe,
+  // la barre glisse depuis le bas de l'écran quand la première modification
+  // arrive, et redescend quand la dernière est annulée.
+  const bar = h('div', { class: 'valbar' },
     h('span', { class: 'valbar__info' }, h('span', { class: 'valbar__dot' }), count),
     h('div', { class: 'valbar__actions' }, annuler, valider),
   );
@@ -449,7 +606,7 @@ function validateBar(onValider, onAnnuler) {
     el: bar,
     set(v) {
       n = v;
-      bar.hidden = n === 0;
+      bar.classList.toggle('is-on', n > 0);
       count.textContent = libelle();
     },
     /** Envoi en cours : la barre dit ce qui se passe et se refuse au double tap. */
@@ -578,13 +735,24 @@ function exterieurBlock(exterieurs, onExterieur) {
  * @param handlers { onCommit(changes) → {repaint}, onExterieur(macros) }
  */
 export function renderToday(root, model, handlers) {
-  clear(root);
   const { state, foods, exterieurs } = model;
   const pending = model.pending || new Set();
   const fab = document.getElementById('btn-quoi-manger');
 
+  // La section de jauges SURVIT à la peinture : on la détache, on repeint le
+  // reste, on la remet. C'est ce qui permet à l'anneau de s'animer — recréé, il
+  // naîtrait à sa valeur finale et la transition n'aurait rien à jouer.
+  const gauges = root.querySelector('.gauges') || gaugesRow();
+  // Première peinture de la session : l'inventaire s'y déroule en cascade. Aux
+  // suivantes (après chaque validation), il apparaît d'un bloc — rejouer la
+  // cascade à chaque aller-retour serait épuisant.
+  const premierRendu = !root.querySelector('.inv-list');
+  const jrnVus = root.__jrnVus || null;
+
+  clear(root);
+
   if (state.__offline) {
-    root.append(h('div', { class: 'offline-banner' }, '⚡ Hors-ligne — données du dernier chargement'));
+    root.append(bandeauCache(state.__offline, 'données du dernier chargement'));
   }
 
   // Tout ce qui est affiché vient du serveur. Ce qui attend encore de partir
@@ -598,11 +766,14 @@ export function renderToday(root, model, handlers) {
   }
 
   root.append(h('p', { class: 'day-caption' }, 'Apports du jour'));
-  root.append(gaugesRow(state.jauges, !!state.__attente));
+  root.append(gauges);
+  void gauges.offsetWidth;               // la section vient d'être ré-insérée
+  gauges.maj(state.jauges, { attente: !!state.__attente });
 
   // Ce qui a été compté aujourd'hui, juste sous les jauges qu'il explique.
-  const journal = journalBlock(state, (e) => handlers.onSupprimerEntree(e));
+  const journal = journalBlock(state, (e) => handlers.onSupprimerEntree(e), jrnVus);
   if (journal) root.append(journal);
+  root.__jrnVus = new Set((state.journal || []).map((e) => String(e.id)));
 
   // Manger dehors : au-dessus de l'inventaire, à portée de pouce.
   root.append(exterieurBlock(exterieurs || [], handlers.onExterieur));
@@ -645,6 +816,16 @@ export function renderToday(root, model, handlers) {
 
   const bar = validateBar(() => onValider(), () => onAnnuler());
   const rows = ordered.map((f) => invRow(f, () => updateBar(), pending.has(String(f.id))));
+
+  // Cascade d'entrée, première peinture seulement, et seulement sur ce qui tient
+  // à l'écran : au-delà d'une douzaine de lignes on n'anime plus rien de visible,
+  // on ne fait qu'ajouter du retard avant que la liste soit utilisable.
+  if (premierRendu && !sobre()) {
+    rows.slice(0, 12).forEach((r, i) => {
+      r.el.classList.add('is-entree');
+      r.el.style.setProperty('--i', String(i));
+    });
+  }
 
   // Les lignes sont construites UNE fois et se contentent de se masquer : un
   // curseur déplacé puis filtré garde sa position (reconstruire la liste la
@@ -710,6 +891,19 @@ export function renderToday(root, model, handlers) {
     envoiEnCours = true;
     bar.envoi(true);
     rows.forEach((r) => r.lock(true));
+
+    // Remontée en haut, et les anneaux partent tout de suite vers la valeur
+    // projetée. On valide en bas d'une longue liste : sans ça, l'effet de la
+    // saisie se produit hors de l'écran, et il ne reste que l'attente.
+    //
+    // La projection ne contredit pas la règle du 2026-08-13 (« on n'affiche
+    // jamais un état non confirmé ») : elle ne touche ni au stock ni aux lignes,
+    // n'est écrite nulle part, et se recalcule à chaque peinture depuis l'état
+    // du serveur. Le double comptage qu'évitait cette règle venait d'un bump
+    // PERSISTÉ qui survivait à l'échec de l'envoi — ici, un échec la reprend.
+    remonter();
+    if (!state.__attente) gauges.maj(state.jauges, { ajout: projeter(changes) });
+
     let res;
     try { res = await handlers.onCommit(changes); }
     finally {
@@ -717,6 +911,7 @@ export function renderToday(root, model, handlers) {
       if (!res || !res.repaint) {          // l'écran n'a pas été refait : on dégèle
         rows.forEach((r) => r.lock(false));
         bar.envoi(false);
+        gauges.maj(state.jauges, { attente: !!state.__attente });   // projection reprise
       }
     }
   }

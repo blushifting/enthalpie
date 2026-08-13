@@ -708,11 +708,16 @@ function intakeParJour_(tz) {
 /**
  * Moyennes journalières par semaine glissante (nb semaines de 7 j finissant
  * aujourd'hui), du plus ancien au plus récent, + cibles/tolérances + streak
- * protéines (nb de semaines récentes consécutives dans la fenêtre prot). La
- * semaine courante est partielle : on divise par les jours écoulés, pas 7.
+ * protéines (nb de semaines RÉVOLUES consécutives dans la fenêtre prot).
  * `parJour` est optionnel (recalculé si absent) — getBilan_ le partage avec
  * joursRecents_ pour ne lire le journal qu'une fois.
  */
+// Jours saisis (sur 7) en deçà desquels une semaine ne peut pas prétendre être
+// « tenue ». 6 et non 7 : un oubli de saisie dans la semaine ne doit pas effacer
+// un mois de régularité — mais le jour manquant compte pour 0 dans la moyenne,
+// donc la tolérance ne rend jamais le compteur plus généreux qu'il ne doit.
+var COUVERTURE_MINI = 6;
+
 function moyennesHebdo_(tz, nb, parJour) {
   parJour = parJour || intakeParJour_(tz);
   var obj = objectifs_();
@@ -742,6 +747,10 @@ function moyennesHebdo_(tz, nb, parJour) {
       label: w === 0 ? 'Cette sem.' : 'S-' + w,
       jours_ecoules: joursEcoules,
       jours_avec_donnees: joursAvecDonnees,
+      // `revolue` : la fenêtre ne contient pas la journée en cours. Seules
+      // celles-là peuvent entrer au streak (cf. plus bas) — et la PWA en a
+      // besoin pour dire « il manque encore des jours » sans redériver les dates.
+      revolue: w > 0,
       moyennes: {
         kcal: round1_(somme.kcal / denom),
         prot_g: round1_(somme.prot_g / denom),
@@ -756,10 +765,23 @@ function moyennesHebdo_(tz, nb, parJour) {
   // L'étendre aux fibres reviendrait à faire un compteur de régularité sur un
   // indicateur qui sous-compte structurellement — générateur de culpabilité
   // injustifiée (skill nutrition §6).
+  //
+  // Deux conditions ajoutées le 2026-08-13 — sans elles, le compteur annonçait
+  // « 1 semaine tenue » à quelqu'un qui n'avait pas une seule semaine de suivi :
+  //  1. La semaine doit être RÉVOLUE. Celle qui finit aujourd'hui contient une
+  //     journée en cours, comptée pour ce qu'on en a saisi à cette heure-ci : sa
+  //     moyenne monte au fil des repas, donc le compteur se serait allumé et
+  //     éteint plusieurs fois par jour.
+  //  2. Elle doit être COUVERTE — au moins COUVERTURE_MINI jours saisis sur 7.
+  //     Une semaine dont deux jours copieux sont saisis et cinq laissés vides a
+  //     beau afficher une moyenne flatteuse, elle ne dit rien de la régularité :
+  //     c'est un trou de saisie, pas une semaine tenue.
   var streak = 0;
   if (cibleProt > 0) {
     for (var i = semaines.length - 1; i >= 0; i--) {
-      if (semaines[i].jours_avec_donnees > 0 && semaines[i].moyennes.prot_g >= cibleProt - tolProt) streak++;
+      var s = semaines[i];
+      if (!s.revolue) continue;                       // la semaine en cours ne compte pas encore
+      if (s.jours_avec_donnees >= COUVERTURE_MINI && s.moyennes.prot_g >= cibleProt - tolProt) streak++;
       else break;
     }
   }
@@ -776,7 +798,10 @@ function moyennesHebdo_(tz, nb, parJour) {
       fibres_g: Number(obj.tol_fibres) || 0
     },
     semaines: semaines,
-    streak_prot: streak
+    streak_prot: streak,
+    // La PWA affiche l'exigence de couverture au lieu d'un simple « pas tenu » :
+    // elle doit donc connaître le seuil, pas le deviner.
+    couverture_mini: COUVERTURE_MINI
   };
 }
 

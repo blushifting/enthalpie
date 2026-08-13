@@ -1,7 +1,7 @@
 // Bootstrap : shell, navigation, gate token, chargement state+catalog, handlers.
 import { h, $, clear, toast, num } from './util.js';
 import { store } from './store.js';
-import { getBoot, getCourses, getCuisine, getBilan, postCommit, adjustStock, logCourses, logPotFini, logBatch, logExterieur, addProduit, setCategories, opId, ApiError, IS_DEMO } from './api.js';
+import { getBoot, getCourses, getCuisine, getBilan, postCommit, adjustStock, logCourses, logPotFini, logBatch, logExterieur, annulerExterieur, addProduit, setCategories, opId, ApiError, IS_DEMO } from './api.js';
 import { renderToday } from './today.js';
 import { renderCourses } from './courses.js';
 import { renderCuisine } from './cuisine.js';
@@ -67,6 +67,16 @@ function buildModel(state, catalog) {
     fibres_g: (x.fibres_100g === '' || x.fibres_100g == null) ? null : Number(x.fibres_100g),
   });
 
+  // Badges G / L du stock (2026-08-13). Seul un « oui » explicite allume le
+  // badge : une colonne vide veut dire « pas renseigné », et afficher un badge
+  // par défaut — dans un sens comme dans l'autre — serait une affirmation que
+  // la base ne porte pas. Les flags des produits sont saisis au scan, ceux des
+  // plats sont hérités de leur composition (backend, flagsComposition_).
+  const flags = (x) => ({
+    gluten: String(x.flag_gluten || '').toLowerCase() === 'oui',
+    lactose: String(x.flag_lactose || '').toLowerCase() === 'oui',
+  });
+
   const foods = (catalog.produits || []).map((pr) => ({
     id: pr.id,
     nom: pr.nom,
@@ -77,6 +87,7 @@ function buildModel(state, catalog) {
     paquet: Number(pr.poids_paquet_g) || 0,    // 0 = poids inconnu
     // '' = pas encore rangé (colonne absente d'un Sheet d'avant le 2026-08-11).
     categorie: String(pr.categorie || ''),
+    ...flags(pr),
   }));
 
   // Plats batch cuisinés = articles de stock au curseur, comme le reste. Leur
@@ -90,6 +101,7 @@ function buildModel(state, catalog) {
       id: pl.id, nom: pl.nom, kind: 'plat', ean: '',
       macros: macros100(pl),
       stock: s, paquet: Number(pl.poids_fournee_g) || 0,
+      ...flags(pl),
     });
   }
 
@@ -460,7 +472,48 @@ const handlers = {
   onCommit: (changes) => commitChanges(changes),   // validation de l'inventaire
   onExterieur: (macros) => exterieurAction(macros),
   onRanger: () => openRanger(M ? M.foods : [], rangerAction),
+  onSupprimerEntree: (entree) => supprimerEntree(entree),   // ✕ du résumé du jour
 };
+
+/**
+ * ✕ du résumé du jour : retire une entrée de la journée.
+ *
+ * Un aliment n'a besoin d'aucune mécanique nouvelle — c'est un `commit` de delta
+ * négatif, exactement ce que produit un curseur reculé : la quantité repart au
+ * stock et les apports quittent les jauges. Un repas extérieur, lui, n'a ni
+ * stock ni curseur : il faut retirer sa ligne du journal côté serveur.
+ */
+async function supprimerEntree(e) {
+  if (!e) return;
+  if (e.type !== 'exterieur') {
+    const grammes = Number(e.grammes) || 0;
+    if (!(grammes > 0)) return;
+    const res = await commitChanges(
+      [{ ref: e.ref, food: { kind: e.type }, delta: -grammes }],
+      { libelle: `${e.nom} retiré du jour` });
+    // Refus du serveur : l'écran n'a pas été repeint, donc la ligne du journal
+    // est toujours là — il faut la dégeler.
+    if (res && res.repaint === false) throw new Error('refus serveur');
+    return;
+  }
+
+  const id = opId();
+  syncing(true);
+  try {
+    const data = await annulerExterieur(e.rang, e.kcal, id);
+    toast('Repas extérieur retiré', 'ok');
+    if (data && data.state) adopter(data.state);
+    else await reconcile();                    // mode démo : pas d'état renvoyé
+  } catch (err) {
+    // Pas de mise en file hors-ligne : `rang` désigne une position dans le
+    // journal du jour, et rejouer plus tard une annulation calculée sur un
+    // journal périmé retirerait le mauvais repas. On demande de réessayer.
+    toast(isOffline(err) ? 'Hors-ligne — réessaie une fois connecté' : describeError(err), 'err');
+    throw err;                                 // la ligne se dégèle côté écran
+  } finally {
+    syncing(false);
+  }
+}
 
 /** Enregistre un lot de rangements, puis recharge le catalogue (les pastilles
  *  de filtre en dépendent). Pas de file offline : ranger n'est pas urgent, et
@@ -493,7 +546,7 @@ async function rangerAction(items) {
  * @returns {Promise<{repaint:boolean}>} repaint=true → l'écran a été repeint,
  *   le DOM de l'appelant est caduc (sinon il garde ses curseurs pour réessayer).
  */
-async function commitChanges(changes) {
+async function commitChanges(changes, { libelle = '' } = {}) {
   const id = opId();
   const payload = changes.map((c) => ({
     ref: c.ref,
@@ -505,7 +558,7 @@ async function commitChanges(changes) {
   try {
     const data = await postCommit(payload, id);
     const n = changes.length;
-    toast(`${n} aliment${n > 1 ? 's' : ''} mis à jour`, 'ok');
+    toast(libelle || `${n} aliment${n > 1 ? 's' : ''} mis à jour`, 'ok');
     if (data && data.state) adopter(data.state);
     else await reconcile();               // mode démo : pas d'état renvoyé
     if (data && data.ignores && data.ignores.length) {

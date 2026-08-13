@@ -109,6 +109,135 @@ function gaugesRow(jauges, attente = false) {
   );
 }
 
+/* ---------- Résumé du jour ---------- */
+
+/*
+ * Seuils du code couleur du stock. Les deux premiers ne sont pas improvisés :
+ * ce sont les allégations nutritionnelles du règlement UE 1924/2006, celles-là
+ * mêmes qu'un fabricant doit respecter pour écrire « source de » sur un paquet.
+ *   - source de protéines : elles fournissent au moins 12 % de l'énergie ;
+ *   - source de fibres    : au moins 3 g pour 100 g.
+ * Les deux paliers de calories, eux, sont des choix d'AFFICHAGE (à quel moment
+ * la densité calorique devient l'information dominante d'une ligne), pas des
+ * recommandations nutritionnelles — c'est pourquoi ils vivent ici et non dans
+ * le skill nutrition.
+ */
+const PART_ENERGIE_PROT = 0.12;   // UE 1924/2006 — « source de protéines »
+const FIBRES_SOURCE_G = 3;        // UE 1924/2006 — « source de fibres », /100 g
+// Plancher absolu : sans lui, un épinard (3 g de protéines mais 25 kcal) sort
+// « source de protéines » — formellement vrai, absurde dans une liste de stock,
+// puisqu'il en faudrait 400 g pour que ça compte.
+const PROT_PLANCHER_G = 5;
+const KCAL_DENSE = 400;           // huile, oléagineux : la densité prime sur le reste
+const KCAL_NOTABLE = 150;         // en dessous, un aliment sans prot ni fibres n'est marquant sur rien
+
+/**
+ * Macro dominante d'un aliment, pour 100 g → 'prot' | 'kcal' | 'fibres' | ''
+ * (rien de marquant : épices, bouillon, légumes très légers).
+ *
+ * Une première version comparait les trois macros en part de cible journalière.
+ * Elle donnait des verdicts absurdes sur les aliments cuits, dont les trois
+ * valeurs sont basses : le riz complet cuit ressortait « fibres » parce que ses
+ * 1,8 g pesaient un cheveu de plus que ses 130 kcal. On classe donc par seuils
+ * absolus, et un aliment qui n'en franchit aucun n'est coloré par rien.
+ */
+export function macroDominante(macros) {
+  const m = macros || {};
+  const kcal = Number(m.kcal) || 0;
+  const prot = Number(m.prot_g) || 0;
+  // `|| 0` : une fiche dont les fibres ne sont pas renseignées (null) ne peut
+  // pas prétendre au vert — la jauge fibres minore, le code couleur aussi.
+  const fibres = Number(m.fibres_g) || 0;
+
+  if (kcal >= KCAL_DENSE) return 'kcal';
+
+  const candidats = [];
+  const partProt = kcal > 0 ? (prot * 4) / kcal : 0;
+  if (prot >= PROT_PLANCHER_G && partProt >= PART_ENERGIE_PROT) {
+    candidats.push({ kind: 'prot', score: partProt / PART_ENERGIE_PROT });
+  }
+  if (fibres >= FIBRES_SOURCE_G) {
+    candidats.push({ kind: 'fibres', score: fibres / FIBRES_SOURCE_G });
+  }
+  // Deux fois « source de » : on garde celui qui dépasse son seuil de le plus
+  // loin, seule comparaison qui ait un sens entre deux unités différentes.
+  if (candidats.length) return candidats.sort((a, b) => b.score - a.score)[0].kind;
+
+  return kcal >= KCAL_NOTABLE ? 'kcal' : '';
+}
+
+/**
+ * Ce qui a été mangé aujourd'hui, entre les jauges et « Manger dehors ».
+ *
+ * Volontairement minimal (choix d'Azur du 2026-08-13) : une ligne par aliment,
+ * son nom, la part du paquet consommée, et un ✕. Ni poids ni macros — les
+ * jauges au-dessus disent déjà le total, et le détail par aliment est dans le
+ * mode « ⓘ nutri » du stock. Ce bloc répond à une seule question : « qu'est-ce
+ * que j'ai compté aujourd'hui, et où est mon erreur ? »
+ *
+ * Le ✕ n'ouvre pas de confirmation : pour un aliment, il rend la quantité au
+ * stock et retire les apports du jour — c'est le curseur reculé, en un tap.
+ */
+function journalBlock(state, onSupprimer) {
+  const entrees = Array.isArray(state.journal) ? state.journal : null;
+  // Backend pas encore redéployé : pas de `journal` du tout. On ne montre alors
+  // rien plutôt qu'une section vide qui laisserait croire à une journée blanche.
+  if (!entrees) return null;
+
+  const head = h('div', { class: 'list-head' },
+    h('span', {}, 'Mangé aujourd’hui'),
+    entrees.length ? h('span', { class: 'list-head__n' }, `${entrees.length} entrée${entrees.length > 1 ? 's' : ''}`) : null);
+
+  // Cache d'un autre jour : le journal affiché serait celui d'hier. Même règle
+  // que les anneaux, qui passent en « actualisation » (2026-08-11).
+  if (state.__attente) {
+    return h('section', { class: 'jrn-section' }, head,
+      h('div', { class: 'jrn' }, h('div', { class: 'jrn__vide' }, 'Actualisation…')));
+  }
+
+  if (!entrees.length) {
+    return h('section', { class: 'jrn-section' }, head,
+      h('div', { class: 'jrn' },
+        h('div', { class: 'jrn__vide' }, 'Rien saisi aujourd’hui.')));
+  }
+
+  const liste = h('div', { class: 'jrn' });
+  // Le plus récent en tête : c'est là que se trouve l'erreur qu'on vient de faire.
+  entrees.slice().reverse().forEach((e) => {
+    const ext = e.type === 'exterieur';
+    const paquet = Number(e.paquet_g) || 0;
+    const grammes = Number(e.grammes) || 0;
+    // La part du paquet, et à défaut les grammes : sans poids de paquet connu,
+    // un pourcentage n'aurait aucune référence (même dégradé que le curseur).
+    const mesure = ext
+      ? `${numEntier(e.kcal)} kcal`
+      : (paquet > 0 ? `${Math.round((grammes / paquet) * 100)} %` : `${num(Math.round(grammes))} g`);
+
+    const x = h('button', {
+      class: 'jrn__x', type: 'button',
+      'aria-label': `Retirer ${e.nom} du journal du jour`,
+    }, '✕');
+    const row = h('div', { class: `jrn__row ${ext ? 'is-ext' : ''}` },
+      h('span', { class: 'jrn__nom' }, ext ? `Repas extérieur${e.nom && e.nom !== 'Repas extérieur' ? ` · ${e.nom}` : ''}` : e.nom),
+      h('span', { class: 'jrn__pct' }, mesure),
+      x);
+    x.addEventListener('click', () => {
+      // Gelée pendant l'aller-retour : un double tap enverrait deux annulations,
+      // et la seconde retirerait le repas suivant (le rang aurait glissé).
+      if (x.disabled) return;
+      x.disabled = true;
+      row.classList.add('is-envoi');
+      Promise.resolve(onSupprimer(e)).catch(() => {
+        x.disabled = false;
+        row.classList.remove('is-envoi');
+      });
+    });
+    liste.append(row);
+  });
+
+  return h('section', { class: 'jrn-section' }, head, liste);
+}
+
 /* ---------- Inventaire ---------- */
 /**
  * Repères de stock, tout en grammes. Le curseur exprime la part D'UN PAQUET
@@ -137,6 +266,23 @@ function stockMeta(food) {
     pct: Math.round(((paquet - ouvert) / paquet) * 100),
     inconnu: false,
   };
+}
+
+/**
+ * Badges « G » (gluten) et « L » (lactose), à la suite du nom (2026-08-13).
+ * Uniquement quand la base l'affirme : un produit non renseigné n'affiche rien,
+ * et l'absence de badge ne vaut donc pas « sans gluten ». Volontairement gris —
+ * les couleurs de la liste sont déjà prises par les macros, et un allergène
+ * n'est pas une alerte ici (aucun mode strict n'est activé).
+ */
+function badgesAllergenes(food) {
+  const badge = (lettre, titre) => h('span', {
+    class: 'inv-row__flag', title: titre, 'aria-label': titre, role: 'img',
+  }, lettre);
+  const out = [];
+  if (food.gluten) out.push(badge('G', 'Contient du gluten'));
+  if (food.lactose) out.push(badge('L', 'Contient du lactose'));
+  return out;
 }
 
 /** Bloc info (toggle « ⓘ nutri ») : état du paquet en cours et macros /100 g. */
@@ -198,9 +344,15 @@ function invRow(food, onChange, enAttente = false) {
   // en double, ce qui est exactement le bug du 2026-08-13.
   if (enAttente) slider.disabled = true;
 
-  const row = h('div', { class: `inv-row ${enAttente ? 'is-attente' : ''}`, id: `food-${food.id}` },
+  // Liseré de gauche = macro dominante (2026-08-13). La liste était monochrome :
+  // seul le nom distinguait un féculent d'une source de protéines, ce qui oblige
+  // à lire chaque ligne. La couleur est celle de la jauge correspondante — aucun
+  // vocabulaire nouveau à apprendre.
+  const dom = macroDominante(food.macros);
+
+  const row = h('div', { class: `inv-row inv-row--${dom || 'neutre'} ${enAttente ? 'is-attente' : ''}`, id: `food-${food.id}` },
     h('div', { class: 'inv-row__top' },
-      h('span', { class: 'inv-row__nom' }, food.nom),
+      h('span', { class: 'inv-row__nom' }, food.nom, ...badgesAllergenes(food)),
       level,
     ),
     infoBlock(food, meta),
@@ -447,6 +599,10 @@ export function renderToday(root, model, handlers) {
 
   root.append(h('p', { class: 'day-caption' }, 'Apports du jour'));
   root.append(gaugesRow(state.jauges, !!state.__attente));
+
+  // Ce qui a été compté aujourd'hui, juste sous les jauges qu'il explique.
+  const journal = journalBlock(state, (e) => handlers.onSupprimerEntree(e));
+  if (journal) root.append(journal);
 
   // Manger dehors : au-dessus de l'inventaire, à portée de pouce.
   root.append(exterieurBlock(exterieurs || [], handlers.onExterieur));

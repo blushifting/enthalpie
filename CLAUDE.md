@@ -26,6 +26,27 @@ Refonte du **2026-08-08** — à ne jamais reperdre :
 
 Le schéma qui fait foi est la constante `SCHEMA` en tête de `backend/Code.gs`.
 
+## Règle n°2 : on n'affiche jamais un stock non synchronisé
+
+Refonte du **2026-08-13**, après des doubles comptages en usage réel :
+
+- **Toute écriture porte un `op_id`** et le backend mémorise ceux déjà appliqués
+  (onglet `ops`). Apps Script répond en 1 à 3 s derrière une redirection : quand la réponse se
+  perd, la PWA rejoue — sans identifiant, le rejeu comptait une deuxième fois. **Ne jamais
+  ajouter un appel d'écriture sans `op_id`**, et **reprendre le même** quand on met en file une
+  tentative perdue (`store.enqueue` s'en charge si le payload le porte).
+- **Toute écriture passe par `ecrire_()`** côté backend, donc par `LockService`. Sans verrou,
+  deux `adjustStock_` concurrents lisent le même stock et le second écrase le premier.
+- **L'écran Aujourd'hui ne peint que l'état du serveur.** Plus d'optimisme sur le stock ni sur
+  les jauges (sauf mode démo). Pendant l'envoi, les lignes sont gelées ; si le lot part en file,
+  elles restent gelées, marquées « en attente », et un bandeau prévient que les chiffres ne
+  comptent pas encore ces modifications. Empiler une saisie sur un état local divergent était
+  la manœuvre exacte qui produisait les doublons.
+- **Un curseur reculé retire aussi les apports du jour**, plafonné à ce qui a été logué le jour
+  même (`commit_`) : un `ajustement` seul ne touche pas les jauges, c'était le bug.
+- Un lot de curseurs = **un seul POST `commit`**, dont la réponse contient l'état frais.
+  Démarrage = **un seul GET `boot`** (state + catalog). Ne pas revenir à N appels.
+
 ## Deux invariants du scan / de toute entrée de stock
 
 1. **Un produit à stock 0 est invisible dans l'inventaire** (`today.js` ne liste que `stock > 0`).

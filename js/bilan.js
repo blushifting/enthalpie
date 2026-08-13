@@ -119,6 +119,44 @@ function metricBlock(metric, data, mode) {
     metric.note ? h('p', { class: 'bilan-metric__note' }, metric.note) : null);
 }
 
+/**
+ * Bloc streak protéines (SPEC §7) — hebdo par nature, donc affiché dans les
+ * deux modes.
+ *
+ * Il ne compte que des semaines RÉVOLUES et COUVERTES (≥ `couverture_mini`
+ * jours saisis sur 7). Tant qu'il n'y en a aucune, on ne montre ni flamme ni
+ * reproche : le compteur n'a simplement pas encore de quoi se prononcer, et
+ * l'écrire est plus utile que « pas tenu » — c'était le bug du 2026-08-13, où
+ * une semaine à peine entamée s'annonçait tenue.
+ *
+ * Le repli sur la position (`i < length - 1`) couvre le backend pas encore
+ * redéployé, qui ne renvoie ni `revolue` ni `couverture_mini` : la dernière
+ * semaine de la liste est toujours celle qui finit aujourd'hui.
+ */
+function streakBloc(d) {
+  const semaines = d.semaines || [];
+  const mini = Number(d.couverture_mini) || 6;
+  const revolue = (s, i) => (s.revolue != null ? !!s.revolue : i < semaines.length - 1);
+  const eligibles = semaines.filter((s, i) => revolue(s, i) && (Number(s.jours_avec_donnees) || 0) >= mini);
+
+  if (!eligibles.length) {
+    const courante = semaines[semaines.length - 1] || {};
+    const saisis = Number(courante.jours_avec_donnees) || 0;
+    return h('div', { class: 'bilan-streak' },
+      h('span', { class: 'bilan-streak__ico' }, '📅'),
+      h('span', {},
+        'Compteur hebdo : ', h('b', {}, `${saisis} jour${saisis > 1 ? 's' : ''} sur 7`),
+        ` saisis cette semaine. Il démarre à la première semaine complète (${mini} jours minimum).`));
+  }
+
+  const streak = Number(d.streak_prot) || 0;
+  return h('div', { class: `bilan-streak ${streak > 0 ? 'is-on' : ''}` },
+    h('span', { class: 'bilan-streak__ico' }, streak > 0 ? '🔥' : '💤'),
+    streak > 0
+      ? h('span', {}, h('b', {}, `${streak} semaine${streak > 1 ? 's' : ''}`), ' dans la fenêtre protéines')
+      : h('span', {}, 'Dernière semaine complète sous la fenêtre protéines'));
+}
+
 /** Bascule jour / semaine ; le choix est mémorisé d'une visite à l'autre. */
 function echelleToggle(mode, onPick) {
   const btn = (m) => h('button', {
@@ -160,14 +198,7 @@ export function renderBilan(root, data) {
       ? echelleToggle(mode, (m) => { store.setBilanMode(m); renderBilan(root, data); })
       : null));
 
-  // Streak protéines (gamification douce, SPEC §7) — hebdo par nature, donc
-  // affiché dans les deux modes.
-  const streak = Number(d.streak_prot) || 0;
-  root.append(h('div', { class: `bilan-streak ${streak > 0 ? 'is-on' : ''}` },
-    h('span', { class: 'bilan-streak__ico' }, streak > 0 ? '🔥' : '💤'),
-    streak > 0
-      ? h('span', {}, h('b', {}, `${streak} semaine${streak > 1 ? 's' : ''}`), ' dans la fenêtre protéines')
-      : h('span', {}, 'Fenêtre protéines pas encore tenue sur une semaine complète')));
+  root.append(streakBloc(d));
 
   const jours = d.jours || [];
   const range = mode === 'jour' && jours.length

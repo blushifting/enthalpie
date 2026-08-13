@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enthalpie — maquette : résumé du jour + couleurs du stock</title>
+<style>
+/* Palette et mesures reprises telles quelles de pwa/css/styles.css : ce qui est
+   validé ici se transpose sans retouche de couleur. */
+:root {
+  --bg:#0e0f12; --bg-elev:#16181d; --surface:#1b1e24; --surface-2:#23272f; --line:#2c3038;
+  --txt:#e8eaee; --txt-muted:#9aa1ab; --txt-dim:#6b7280;
+  --prot:#ef6f9c; --kcal:#e0a458; --fibres:#59c896; --accent:#7aa2f7;
+  --ok:#59c896; --warn:#e0a458; --danger:#e0554f;
+  --radius:16px; --radius-sm:12px; --pad:16px;
+  --font:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:#08090b; color:var(--txt); font-family:var(--font); }
+.wrap { max-width:1180px; margin:0 auto; padding:24px 16px 64px; }
+h1 { font-size:20px; margin:0 0 4px; }
+.lede { color:var(--txt-muted); font-size:14px; margin:0 0 28px; max-width:70ch; line-height:1.5; }
+h2 { font-size:16px; margin:34px 0 6px; }
+.note { color:var(--txt-dim); font-size:13px; margin:0 0 16px; max-width:70ch; line-height:1.5; }
+.grid { display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start; }
+.phone {
+  width:372px; background:var(--bg); border:1px solid var(--line); border-radius:22px;
+  padding:14px var(--pad) 20px; box-shadow:0 18px 40px rgba(0,0,0,.45);
+}
+.phone__tag {
+  font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent);
+  font-weight:700; margin:0 0 12px;
+}
+.day-caption { font-size:12.5px; color:var(--txt-dim); text-transform:uppercase; letter-spacing:.06em; margin:0 2px 8px; font-weight:700; }
+
+/* ---- jauges (réduites, juste pour situer le contexte) ---- */
+.gauges { display:flex; gap:8px; margin-bottom:16px; }
+.g { flex:1; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:10px 6px; text-align:center; }
+.g__v { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; }
+.g__t { display:block; font-size:10.5px; color:var(--txt-dim); }
+.g__l { font-size:11px; color:var(--txt-muted); margin-top:4px; }
+.g--prot .g__v { color:var(--prot); } .g--kcal .g__v { color:var(--kcal); } .g--fib .g__v { color:var(--fibres); }
+
+/* ---- en-tête de section ---- */
+.list-head { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin:18px 2px 8px; font-size:14.5px; font-weight:650; }
+.list-head__n { font-size:12px; color:var(--txt-dim); font-weight:600; }
+
+/* =====================================================================
+   A. RÉSUMÉ DU JOUR
+   ===================================================================== */
+.jrn { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
+.jrn__row { display:flex; align-items:center; gap:10px; padding:11px 12px; border-top:1px solid var(--line); }
+.jrn__row:first-child { border-top:0; }
+.jrn__dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; background:var(--txt-dim); }
+.jrn__dot--prot { background:var(--prot); } .jrn__dot--kcal { background:var(--kcal); } .jrn__dot--fib { background:var(--fibres); }
+.jrn__main { flex:1; min-width:0; }
+.jrn__nom { font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.jrn__sub { font-size:11.5px; color:var(--txt-dim); font-variant-numeric:tabular-nums; margin-top:2px; }
+.jrn__macros { font-size:12px; color:var(--txt-muted); font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+.jrn__macros b { color:var(--txt); font-weight:650; }
+.jrn__x {
+  width:34px; height:34px; flex-shrink:0; border:0; border-radius:10px;
+  background:var(--surface-2); color:var(--txt-dim); font-size:15px; line-height:1; cursor:pointer;
+}
+.jrn__x:hover { background:color-mix(in srgb, var(--danger) 22%, var(--surface-2)); color:var(--danger); }
+.jrn__foot {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:10px 12px; border-top:1px solid var(--line); background:var(--bg-elev);
+  font-size:12px; color:var(--txt-dim);
+}
+.jrn__tout { background:transparent; border:0; color:var(--accent); font-size:12.5px; font-weight:650; cursor:pointer; padding:4px; }
+.jrn__ext { border-left:2px solid var(--kcal); }
+
+/* état supprimé (undo) */
+.jrn__row--undo { background:color-mix(in srgb, var(--danger) 9%, var(--surface)); }
+.jrn__row--undo .jrn__nom { color:var(--txt-dim); text-decoration:line-through; }
+.jrn__undo { background:transparent; border:1px solid var(--line); color:var(--txt); border-radius:10px; font-size:12px; padding:7px 11px; cursor:pointer; }
+
+/* état vide */
+.jrn__vide { padding:22px 14px; text-align:center; color:var(--txt-dim); font-size:13px; line-height:1.5; }
+
+/* variante B : liseré + heure en colonne */
+.jrnB__row { display:flex; align-items:center; gap:11px; padding:11px 12px 11px 10px; border-top:1px solid var(--line); }
+.jrnB__row:first-child { border-top:0; }
+.jrnB__h { font-size:11px; color:var(--txt-dim); font-variant-numeric:tabular-nums; width:34px; flex-shrink:0; }
+.jrnB__bar { width:3px; align-self:stretch; border-radius:2px; background:var(--txt-dim); flex-shrink:0; }
+.jrnB__bar--prot { background:var(--prot); } .jrnB__bar--kcal { background:var(--kcal); } .jrnB__bar--fib { background:var(--fibres); }
+
+/* =====================================================================
+   B. STOCK — code couleur
+   ===================================================================== */
+.inv-row { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; margin-bottom:8px; }
+.inv-row__top { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+.inv-row__nom { font-size:15px; font-weight:600; }
+.inv-row__level { font-size:12px; color:var(--txt-muted); font-variant-numeric:tabular-nums; }
+.inv-row__info { font-size:11.5px; color:var(--txt-dim); margin-top:4px; }
+.slider { height:8px; border-radius:999px; margin:12px 0 2px; position:relative;
+  background:linear-gradient(to right, var(--accent) 0 32%, var(--surface-2) 32% 100%); }
+.slider::after { content:""; position:absolute; left:32%; top:50%; width:26px; height:26px; margin:-13px 0 0 -13px;
+  border-radius:50%; background:var(--txt); box-shadow:0 2px 6px rgba(0,0,0,.5); }
+
+/* option 1 — liseré vertical */
+.opt1 { border-left:4px solid var(--line); }
+.opt1--prot { border-left-color:var(--prot); }
+.opt1--kcal { border-left-color:var(--kcal); }
+.opt1--fib  { border-left-color:var(--fibres); }
+.opt1--neutre { border-left-color:var(--surface-2); }
+
+/* option 2 — pastille texte */
+.tag { display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:.03em; padding:2px 7px; border-radius:999px; margin-left:8px; vertical-align:1px; }
+.tag--prot { color:var(--prot); background:color-mix(in srgb, var(--prot) 16%, transparent); }
+.tag--kcal { color:var(--kcal); background:color-mix(in srgb, var(--kcal) 16%, transparent); }
+.tag--fib  { color:var(--fibres); background:color-mix(in srgb, var(--fibres) 16%, transparent); }
+
+/* option 3 — micro-barres d'apport */
+.mb { display:flex; gap:3px; margin-top:8px; height:4px; border-radius:2px; overflow:hidden; background:var(--surface-2); }
+.mb i { display:block; height:100%; }
+.mb i.p { background:var(--prot); } .mb i.k { background:var(--kcal); } .mb i.f { background:var(--fibres); }
+.mb-leg { font-size:10.5px; color:var(--txt-dim); margin-top:5px; }
+
+/* barre de tri */
+.tri { display:flex; gap:6px; margin:0 0 10px; flex-wrap:wrap; }
+.chip { background:var(--surface); border:1px solid var(--line); color:var(--txt-muted);
+  border-radius:999px; font-size:12.5px; font-weight:600; padding:8px 13px; cursor:pointer; }
+.chip.is-on { background:var(--surface-2); color:var(--txt); border-color:var(--txt-dim); }
+.chip--macro.is-on { color:var(--prot); border-color:color-mix(in srgb, var(--prot) 45%, var(--line)); }
+.sep { height:1px; background:var(--line); margin:38px 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Maquette — résumé du jour &amp; couleurs du stock</h1>
+<p class="lede">Deux sujets, une page. En haut : où s'insère le récapitulatif des aliments du jour et à quoi il
+ressemble (deux variantes). En bas : trois façons de rendre le stock lisible d'un coup d'œil par macro
+dominante. Palette et mesures identiques à l'app — ce qui est choisi ici se code tel quel.</p>
+
+<h2>A. Résumé du jour — entre les jauges et « Manger dehors »</h2>
+<p class="note">Une ligne par aliment (cumul de la journée, pas une ligne par tap), la plus récente en haut.
+Le ✕ annule l'aliment&nbsp;: la quantité repart au stock, les apports quittent les jauges — exactement ce que fait
+déjà le curseur reculé, donc aucune mécanique nouvelle côté serveur.</p>
+
+<div class="grid">
+
+  <!-- ---------- Variante A ---------- -->
+  <div class="phone">
+    <p class="phone__tag">Variante A — sobre</p>
+    <p class="day-caption">Apports du jour</p>
+    <div class="gauges">
+      <div class="g g--prot"><span class="g__v">74</span><span class="g__t">/ 110 g</span><div class="g__l">Protéines</div></div>
+      <div class="g g--kcal"><span class="g__v">1 820</span><span class="g__t">/ 2 850</span><div class="g__l">Calories</div></div>
+      <div class="g g--fib"><span class="g__v">17,5</span><span class="g__t">/ 30 g</span><div class="g__l">Fibres</div></div>
+    </div>
+
+    <div class="list-head"><span>Mangé aujourd'hui</span><span class="list-head__n">4 entrées</span></div>
+    <div class="jrn">
+      <div class="jrn__row">
+        <span class="jrn__dot jrn__dot--prot"></span>
+        <div class="jrn__main">
+          <div class="jrn__nom">Skyr nature</div>
+          <div class="jrn__sub">300 g · 60 % du pot</div>
+        </div>
+        <div class="jrn__macros"><b>28 g</b> prot<br>174 kcal</div>
+        <button class="jrn__x" aria-label="Retirer Skyr nature">✕</button>
+      </div>
+      <div class="jrn__row">
+        <span class="jrn__dot jrn__dot--kcal"></span>
+        <div class="jrn__main">
+          <div class="jrn__nom">Riz basmati</div>
+          <div class="jrn__sub">160 g · 32 % du paquet</div>
+        </div>
+        <div class="jrn__macros"><b>555 kcal</b><br>11 g prot</div>
+        <button class="jrn__x" aria-label="Retirer Riz basmati">✕</button>
+      </div>
+      <div class="jrn__row jrn__ext">
+        <span class="jrn__dot jrn__dot--kcal"></span>
+        <div class="jrn__main">
+          <div class="jrn__nom">Repas extérieur · normal</div>
+          <div class="jrn__sub">saisi à la main</div>
+        </div>
+        <div class="jrn__macros"><b>800 kcal</b><br>25 g prot</div>
+        <button class="jrn__x" aria-label="Retirer le repas extérieur">✕</button>
+      </div>
+      <div class="jrn__row">
+        <span class="jrn__dot jrn__dot--fib"></span>
+        <div class="jrn__main">
+          <div class="jrn__nom">Lentilles cuites</div>
+          <div class="jrn__sub">150 g · 30 % de la boîte</div>
+        </div>
+        <div class="jrn__macros"><b>7,5 g</b> fibres<br>13 g prot</div>
+        <button class="jrn__x" aria-label="Retirer Lentilles cuites">✕</button>
+      </div>
+    </div>
+
+    <div class="list-head"><span>Manger dehors</span></div>
+    <div class="inv-row" style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">🍽️</span>
+      <div style="flex:1"><div class="inv-row__nom" style="font-size:14px">Repas extérieur</div>
+      <div class="inv-row__info" style="margin-top:2px">Resto, invitation… — ajuste kcal et prot</div></div>
+      <span style="color:var(--txt-dim)">›</span>
+    </div>
+  </div>
+
+  <!-- ---------- Variante B ---------- -->
+  <div class="phone">
+    <p class="phone__tag">Variante B — avec l'heure</p>
+    <p class="day-caption">Apports du jour</p>
+    <div class="gauges">
+      <div class="g g--prot"><span class="g__v">74</span><span class="g__t">/ 110 g</span><div class="g__l">Protéines</div></div>
+      <div class="g g--kcal"><span class="g__v">1 820</span><span class="g__t">/ 2 850</span><div class="g__l">Calories</div></div>
+      <div class="g g--fib"><span class="g__v">17,5</span><span class="g__t">/ 30 g</span><div class="g__l">Fibres</div></div>
+    </div>
+
+    <div class="list-head"><span>Mangé aujourd'hui</span><span class="list-head__n">6 entrées</span></div>
+    <div class="jrn">
+      <div class="jrnB__row">
+        <span class="jrnB__h">19:40</span>
+        <span class="jrnB__bar jrnB__bar--prot"></span>
+        <div class="jrn__main">
+          <div class="jrn__nom">Skyr nature</div>
+          <div class="jrn__sub">300 g · 28 g prot · 174 kcal</div>
+        </div>
+        <button class="jrn__x" aria-label="Retirer Skyr nature">✕</button>
+      </div>
+      <div class="jrnB__row">
+        <span class="jrnB__h">13:05</span>
+        <span class="jrnB__bar jrnB__bar--kcal"></span>
+        <div class="jrn__main">
+          <div class="jrn__nom">Riz basmati</div>
+          <div class="jrn__sub">160 g · 555 kcal · 11 g prot</div>
+        </div>
+        <button class="jrn__x" aria-label="Retirer Riz basmati">✕</button>
+      </div>
+      <div class="jrnB__row">
+        <span class="jrnB__h">13:05</span>
+        <span class="jrnB__bar jrnB__bar--fib"></span>
+        <div class="jrn__main">
+          <div class="jrn__nom">Lentilles cuites</div>
+          <div class="jrn__sub">150 g · 7,5 g fibres · 13 g prot</div>
+        </div>
+        <button class="jrn__x" aria-label="Retirer Lentilles cuites">✕</button>
+      </div>
+      <div class="jrn__foot">
+        <span>2 entrées plus anciennes</span>
+        <button class="jrn__tout">Tout voir</button>
+      </div>
+    </div>
+
+    <div class="list-head"><span>Manger dehors</span></div>
+    <div class="inv-row" style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">🍽️</span>
+      <div style="flex:1"><div class="inv-row__nom" style="font-size:14px">Repas extérieur</div>
+      <div class="inv-row__info" style="margin-top:2px">Resto, invitation… — ajuste kcal et prot</div></div>
+      <span style="color:var(--txt-dim)">›</span>
+    </div>
+  </div>
+
+  <!-- ---------- États ---------- -->
+  <div class="phone">
+    <p class="phone__tag">Les deux autres états</p>
+
+    <div class="list-head"><span>Rien saisi</span></div>
+    <div class="jrn">
+      <div class="jrn__vide">Rien encore aujourd'hui.<br>Fais glisser un curseur du stock,<br>ou logue un repas extérieur.</div>
+    </div>
+
+    <div class="list-head"><span>Après un ✕ (annulation)</span></div>
+    <div class="jrn">
+      <div class="jrn__row jrn__row--undo">
+        <span class="jrn__dot"></span>
+        <div class="jrn__main">
+          <div class="jrn__nom">Riz basmati</div>
+          <div class="jrn__sub">160 g rendus au stock</div>
+        </div>
+        <button class="jrn__undo">Rétablir</button>
+      </div>
+      <div class="jrn__row">
+        <span class="jrn__dot jrn__dot--prot"></span>
+        <div class="jrn__main">
+          <div class="jrn__nom">Skyr nature</div>
+          <div class="jrn__sub">300 g · 60 % du pot</div>
+        </div>
+        <div class="jrn__macros"><b>28 g</b> prot<br>174 kcal</div>
+        <button class="jrn__x">✕</button>
+      </div>
+    </div>
+    <p class="note" style="margin-top:12px">La ligne barrée reste 5 s le temps du « Rétablir », puis disparaît.
+    Pas de pop-up de confirmation : l'annulation étant réversible, demander « es-tu sûr ? » coûterait plus de taps
+    que l'erreur qu'elle prévient.</p>
+  </div>
+</div>
+
+<div class="sep"></div>
+
+<h2>B. Stock — reconnaître un aliment à sa couleur</h2>
+<p class="note">Même règle de classement dans les trois options : pour 100 g, on regarde quelle part de <em>ta</em>
+cible journalière l'aliment couvre (prot/110, kcal/2850, fibres/30) et on retient la plus forte. Aucun seuil
+inventé, aucune valeur nutritionnelle improvisée — le classement sort des chiffres déjà en base.</p>
+
+<div class="grid">
+
+  <div class="phone">
+    <p class="phone__tag">Option 1 — liseré vertical</p>
+    <div class="inv-row opt1 opt1--prot">
+      <div class="inv-row__top"><span class="inv-row__nom">Skyr nature</span><span class="inv-row__level">reste 40 %</span></div>
+      <div class="inv-row__info">63 kcal · 10 g prot · — fibres / 100 g</div>
+      <div class="slider"></div>
+    </div>
+    <div class="inv-row opt1 opt1--kcal">
+      <div class="inv-row__top"><span class="inv-row__nom">Riz basmati</span><span class="inv-row__level">reste 68 % +1 paq.</span></div>
+      <div class="inv-row__info">347 kcal · 7 g prot · 1,3 g fibres / 100 g</div>
+      <div class="slider"></div>
+    </div>
+    <div class="inv-row opt1 opt1--fib">
+      <div class="inv-row__top"><span class="inv-row__nom">Lentilles cuites</span><span class="inv-row__level">reste 70 %</span></div>
+      <div class="inv-row__info">116 kcal · 9 g prot · 7,9 g fibres / 100 g</div>
+      <div class="slider"></div>
+    </div>
+    <div class="inv-row opt1 opt1--neutre">
+      <div class="inv-row__top"><span class="inv-row__nom">Bouillon cube</span><span class="inv-row__level">reste 80 %</span></div>
+      <div class="inv-row__info">— rien de marquant / 100 g</div>
+      <div class="slider"></div>
+    </div>
+    <p class="note" style="margin-top:12px">Discret, ne touche à aucun texte, se lit en balayant la liste du pouce.
+    Gris = l'aliment n'est marquant sur rien (épices, bouillon).</p>
+  </div>
+
+  <div class="phone">
+    <p class="phone__tag">Option 2 — étiquette nommée</p>
+    <div class="inv-row">
+      <div class="inv-row__top"><span class="inv-row__nom">Skyr nature <span class="tag tag--prot">PROT</span></span><span class="inv-row__level">reste 40 %</span></div>
+      <div class="inv-row__info">63 kcal · 10 g prot · — fibres / 100 g</div>
+      <div class="slider"></div>
+    </div>
+    <div class="inv-row">
+      <div class="inv-row__top"><span class="inv-row__nom">Riz basmati <span class="tag tag--kcal">KCAL</span></span><span class="inv-row__level">reste 68 %</span></div>
+      <div class="inv-row__info">347 kcal · 7 g prot · 1,3 g fibres / 100 g</div>
+      <div class="slider"></div>
+    </div>
+    <div class="inv-row">
+      <div class="inv-row__top"><span class="inv-row__nom">Lentilles cuites <span class="tag tag--fib">FIBRES</span></span><span class="inv-row__level">reste 70 %</span></div>
+      <div class="inv-row__info">116 kcal · 9 g prot · 7,9 g fibres / 100 g</div>
+      <div class="slider"></div>
+    </div>
+    <p class="note" style="margin-top:12px">Explicite dès la première ouverture, aucune couleur à apprendre.
+    Mais ça encombre la ligne du nom, et un aliment fort sur deux macros oblige à choisir ou à doubler l'étiquette.</p>
+  </div>
+
+  <div class="phone">
+    <p class="phone__tag">Option 3 — micro-barres d'apport</p>
+    <div class="inv-row">
+      <div class="inv-row__top"><span class="inv-row__nom">Skyr nature</span><span class="inv-row__level">reste 40 %</span></div>
+      <div class="mb"><i class="p" style="flex:9"></i><i class="k" style="flex:2"></i><i class="f" style="flex:0.3"></i></div>
+      <div class="mb-leg">pour 100 g : ■ prot 9 % de la cible · ■ kcal 2 % · ■ fibres —</div>
+      <div class="slider"></div>
+    </div>
+    <div class="inv-row">
+      <div class="inv-row__top"><span class="inv-row__nom">Riz basmati</span><span class="inv-row__level">reste 68 %</span></div>
+      <div class="mb"><i class="p" style="flex:6"></i><i class="k" style="flex:12"></i><i class="f" style="flex:4"></i></div>
+      <div class="mb-leg">pour 100 g : ■ prot 6 % · ■ kcal 12 % · ■ fibres 4 %</div>
+      <div class="slider"></div>
+    </div>
+    <div class="inv-row">
+      <div class="inv-row__top"><span class="inv-row__nom">Lentilles cuites</span><span class="inv-row__level">reste 70 %</span></div>
+      <div class="mb"><i class="p" style="flex:8"></i><i class="k" style="flex:4"></i><i class="f" style="flex:26"></i></div>
+      <div class="mb-leg">pour 100 g : ■ prot 8 % · ■ kcal 4 % · ■ fibres 26 %</div>
+      <div class="slider"></div>
+    </div>
+    <p class="note" style="margin-top:12px">Le plus riche : il montre le profil complet, pas une étiquette réductrice.
+    Mais il ajoute deux lignes par aliment — à réserver au mode « ⓘ nutri » déjà dépliable.</p>
+  </div>
+
+  <div class="phone">
+    <p class="phone__tag">Et le tri ?</p>
+    <p class="note" style="margin:0 0 12px">Rangée du haut : ce qui existe aujourd'hui (où c'est rangé).
+    Une deuxième rangée « par macro » ferait deux systèmes de filtres empilés au-dessus de la liste.</p>
+    <div class="tri">
+      <button class="chip is-on">Tout</button><button class="chip">Frigo</button>
+      <button class="chip">Congélo</button><button class="chip">Placard</button><button class="chip">Fruits/lég</button>
+    </div>
+    <div class="tri">
+      <button class="chip chip--macro is-on">Prot</button><button class="chip">Kcal</button><button class="chip">Fibres</button>
+    </div>
+    <p class="note">Alternative défendue dans la discussion : garder <b>une seule</b> rangée, et laisser
+    « Quoi manger ? » répondre à la question « il me manque des protéines, quoi prendre ? » — c'est déjà son
+    travail, avec le classement `rank` qui tient compte des jauges du jour.</p>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

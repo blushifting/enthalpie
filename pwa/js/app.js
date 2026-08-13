@@ -1,14 +1,26 @@
 // Bootstrap : shell, navigation, gate token, chargement state+catalog, handlers.
 import { h, $, clear, toast, num } from './util.js';
 import { store } from './store.js';
-import { getBoot, getCourses, getCuisine, getBilan, postCommit, adjustStock, logCourses, logPotFini, logBatch, logExterieur, annulerExterieur, addProduit, setCategories, opId, ApiError, IS_DEMO } from './api.js';
+import { getBoot, getCourses, getCuisine, getBilan, postCommit, adjustStockLot, logCourses, logPotFini, logBatch, logExterieur, annulerExterieur, addProduit, setCategories, opId, ApiError, IS_DEMO } from './api.js';
 import { renderToday } from './today.js';
 import { renderCourses } from './courses.js';
 import { renderCuisine } from './cuisine.js';
 import { renderBilan } from './bilan.js';
-import { openQuoiManger } from './quoimanger.js';
-import { openScan } from './scan.js';
-import { openRanger } from './ranger.js';
+/* `scan.js` (23 ko), `ranger.js` et `quoimanger.js` ne servent qu'à un tap, et
+ * jamais au démarrage : les charger à la demande retire leur téléchargement et
+ * leur compilation du chemin critique du premier lancement — c'est près de la
+ * moitié du JS de l'app. Le service worker les précharge de toute façon
+ * (`SHELL` dans sw.js), donc le tap reste instantané dès la deuxième session.
+ *
+ * Les modules d'écran (courses, cuisine, bilan) restent statiques : ils sont
+ * appelés à plusieurs endroits, y compris depuis des chemins qui repeignent
+ * après une réponse réseau, et rendre ces appels asynchrones ouvrirait une
+ * question d'ordre de peinture pour économiser quelques kilo-octets. */
+const modules = {};
+function charger(nom) {
+  if (!modules[nom]) modules[nom] = import(`./${nom}.js`);
+  return modules[nom];
+}
 import { flushQueue, updateQueueBadge, registerServiceWorker, applyUpdate, versionAppShell, chercherMiseAJour } from './sync.js';
 import { DEFAULT_API_BASE, APP_VERSION } from './config.js';
 
@@ -39,12 +51,38 @@ function syncing(on) {
   if (bar) bar.hidden = enCours === 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Fenêtre de fraîcheur                                                */
+/* ------------------------------------------------------------------ */
+/**
+ * Chaque retour sur un onglet relançait un appel réseau — soit, en usage réel,
+ * une poignée d'allers-retours Apps Script par minute, à 2 s dans le meilleur
+ * des cas et parfois trente. Or entre deux taps sur la barre du bas, rien n'a
+ * bougé : c'est cette app qui écrit les données, et toute écriture rapporte
+ * désormais l'état frais avec sa réponse.
+ *
+ * On ne redemande donc que si la dernière réponse a plus d'une minute. Le
+ * rafraîchissement reste toujours accessible d'un geste (tirer vers le bas),
+ * et une écriture périme immédiatement les écrans qu'elle a pu changer.
+ */
+const FRAICHEUR_MS = 60000;
+const vuLe = { today: 0, courses: 0, cuisine: 0, bilan: 0 };
+let forcerRechargement = false;         // armé par le tirer-pour-rafraîchir
+
+function estFrais(nom) {
+  if (forcerRechargement) return false;
+  return Date.now() - (vuLe[nom] || 0) < FRAICHEUR_MS;
+}
+function perimer(...noms) { noms.forEach((n) => { vuLe[n] = 0; }); }
+
 /** Recharge l'écran courant (après synchro d'une file rejouée, retour réseau…). */
 function refreshCurrent() {
-  if (currentScreen === 'today') renderTodayScreen();
-  else if (currentScreen === 'courses') renderCoursesScreen();
-  else if (currentScreen === 'cuisine') renderCuisineScreen();
-  else if (currentScreen === 'bilan') renderBilanScreen();
+  // Renvoie la promesse : le tirer-pour-rafraîchir doit savoir quand relâcher
+  // son indicateur, et le rendre en `then` plutôt qu'à l'aveugle après un délai.
+  if (currentScreen === 'courses') return renderCoursesScreen();
+  if (currentScreen === 'cuisine') return renderCuisineScreen();
+  if (currentScreen === 'bilan') return renderBilanScreen();
+  return renderTodayScreen();
 }
 
 /* ------------------------------------------------------------------ */
@@ -214,6 +252,9 @@ function adopter(state, catalog) {
   if (!state || !CatalogData) return;
   M = buildModel(state, CatalogData);
   store.cacheState(state);
+  // Cet état vient du serveur à l'instant, qu'il arrive d'un `boot` ou de la
+  // réponse d'une écriture : l'écran Aujourd'hui n'a rien à redemander.
+  vuLe.today = Date.now();
   paint();
 }
 
@@ -221,6 +262,11 @@ async function renderTodayScreen() {
   if (!IS_DEMO && !store.hasToken()) { openSettings({ force: true }); return; }
   if (M) paint();
   else if (!peindreDepuisCache()) loadingState();
+
+  // Modèle déjà à jour, jauges du bon jour : rien à redemander. C'est le cas le
+  // plus fréquent (aller sur Courses et revenir), et c'était un appel réseau
+  // complet à chaque fois.
+  if (M && !M.state.__attente && estFrais('today')) return;
 
   syncing(true);
   try {
@@ -238,7 +284,9 @@ async function renderTodayScreen() {
       CatalogData = cc.catalog;
       M = buildModel({ ...cs.state, __offline: true, __attente: cs.state.date !== isoLocal() }, cc.catalog);
       paint();
-      toast('Hors-ligne — données en cache', 'err');
+      toast(err instanceof ApiError && err.enLigne === false
+        ? 'Hors-ligne — données du dernier chargement'
+        : 'Serveur lent — données du dernier chargement', 'err');
     } else if (err instanceof ApiError && err.kind === 'noauth') {
       openSettings({ force: true });
     } else if (currentScreen === 'today') {
@@ -252,21 +300,48 @@ async function renderTodayScreen() {
 function describeError(err) {
   if (!(err instanceof ApiError)) return String((err && err.message) || err);
   switch (err.kind) {
-    case 'network': return 'Réseau indisponible. Vérifie ta connexion.';
+    // `enLigne` (2026-08-13) : la mesure a montré qu'un appel sur trois met plus
+    // de 20 s à revenir d'Apps Script alors que la connexion est parfaite.
+    // Annoncer « Vérifie ta connexion » envoyait chercher une panne qui n'existe
+    // pas — et fait douter d'un réseau qui marche.
+    case 'network': return err.enLigne
+      ? 'Le serveur Google n’a pas répondu à temps. C’est lui, pas ta connexion — réessaie.'
+      : 'Pas de connexion. Tes actions sont gardées et partiront au retour du réseau.';
     case 'backend': return `Le backend a répondu : « ${err.message} ». Vérifie le token dans les réglages.`;
     case 'http':    return `Le serveur a renvoyé une erreur (${err.message}).`;
     default:        return err.message;
   }
 }
 
+/** Formulation d'une mise en file : « hors-ligne » n'est vrai que si on l'est. */
+function libelleFile(err, quoi) {
+  const vraimentHorsLigne = err instanceof ApiError && err.enLigne === false;
+  return vraimentHorsLigne
+    ? `Hors-ligne — ${quoi} mis en file`
+    : `Serveur lent — ${quoi} gardé, ça repartira tout seul`;
+}
+
 /* ------------------------------------------------------------------ */
 /* Écran Courses                                                       */
 /* ------------------------------------------------------------------ */
-function loadingMsg(msg) {
+/**
+ * Squelette de premier chargement, à la place du spinner nu. Il dessine la
+ * FORME de l'écran qui arrive : l'œil se pose déjà au bon endroit, et la page
+ * ne saute pas quand le contenu remplace le vide. Un spinner, lui, ne dit rien
+ * de ce qu'on attend et fait paraître l'attente plus longue qu'elle n'est.
+ * N'apparaît qu'au tout premier chargement d'un écran — ensuite le cache prend
+ * le relais et l'affichage est immédiat.
+ */
+const SQUELETTES = {
+  courses: [20, 64, 64, 64, 20, 64, 64],
+  cuisine: [20, 168, 20, 92, 92],
+  bilan:   [34, 56, 100, 100, 100],
+};
+function squelette(kind) {
   clear(appEl);
-  appEl.append(h('div', { class: 'state' },
-    h('div', { class: 'spinner' }),
-    h('div', { class: 'state__msg' }, msg)));
+  appEl.append(h('div', { class: 'skel', role: 'status', 'aria-label': 'Chargement' },
+    ...(SQUELETTES[kind] || [20, 64, 64, 64]).map((px) =>
+      h('div', { class: 'skel__bloc', style: `height:${px}px` }))));
 }
 
 const coursesHandlers = {
@@ -281,11 +356,13 @@ async function renderCoursesScreen() {
   const cached = store.getCachedCourses();
   const hadCache = !!(cached && cached.courses);
   if (hadCache) { CoursesData = cached.courses; renderCourses(appEl, cached.courses, coursesHandlers); }
-  else loadingMsg('Chargement des courses…');
+  else squelette('courses');
+  if (hadCache && estFrais('courses')) return;
   syncing(true);
   try {
     const courses = await getCourses();
     store.cacheCourses(courses);
+    vuLe.courses = Date.now();
     const changed = !hadCache || !sameData(courses, cached.courses);
     CoursesData = courses;
     if (currentScreen === 'courses' && changed) renderCourses(appEl, courses, coursesHandlers);
@@ -315,12 +392,17 @@ async function validerCourses(items) {
     store.setLastCourses({ at: Date.now(), reverse });   // pour l'annulation
     const n = items.length;
     toast(`${n} article${n > 1 ? 's' : ''} ajouté${n > 1 ? 's' : ''} au stock`, 'ok');
-    M = null;                       // le stock a changé → Aujourd'hui se rechargera
+    perimer('courses');
+    // L'état frais voyage avec la réponse depuis le 2026-08-13 : on l'adopte au
+    // lieu de vider `M` et de déclencher un `boot` complet au prochain passage
+    // sur Aujourd'hui. Un aller-retour Apps Script économisé par validation.
+    if (res && res.state) adopter(res.state);
+    else M = null;
     if (currentScreen === 'courses') renderCourses(appEl, CoursesData, coursesHandlers); // affiche le bandeau d'annulation
   } catch (err) {
     if (isOffline(err)) {
       enqueue({ action: 'log', type: 'courses', items, op_id: id });
-      toast('Hors-ligne — validation mise en file', 'err');
+      toast(libelleFile(err, 'la validation'), 'err');
       // Pas d'annulation hors-ligne : les grammes exacts ne sont connus qu'à la réponse backend.
     } else {
       toast(describeError(err), 'err');
@@ -332,21 +414,23 @@ async function validerCourses(items) {
 async function undoCourses() {
   const last = store.getLastCourses();
   if (!last || !last.reverse || !last.reverse.length) return;
-  // Un op_id PAR ligne, dérivé du lot : le rejeu d'une annulation partiellement
-  // partie ne peut pas re-soustraire ce qui l'a déjà été.
-  const lot = opId();
-  const idDe = (r, i) => `${lot}-${i}`;
+  // UN seul op_id, pour UN seul POST : l'annulation part en lot depuis le
+  // 2026-08-13. Avant, c'était un appel par article — dix articles valaient dix
+  // exécutions Apps Script qui se disputaient le verrou d'écriture une par une.
+  const id = opId();
+  const items = last.reverse.map((r) => ({ ref: r.produit_id, delta: -Number(r.grammes) || 0 }));
   try {
-    await Promise.all(last.reverse.map((r, i) => adjustStock(r.produit_id, -Number(r.grammes) || 0, idDe(r, i))));
+    const res = await adjustStockLot(items, id);
     store.clearLastCourses();
-    M = null;
+    perimer('courses');
+    if (res && res.state) adopter(res.state); else M = null;
     toast('Dernières courses annulées', 'ok');
     renderCoursesScreen();          // recharge : les articles annulés réapparaissent
   } catch (err) {
     if (isOffline(err)) {
-      last.reverse.forEach((r, i) => enqueue({ action: 'log', type: 'ajustement', ref: r.produit_id, delta: -Number(r.grammes) || 0, op_id: idDe(r, i) }));
+      enqueue({ action: 'log', type: 'ajustement', items, op_id: id });
       store.clearLastCourses();
-      toast('Hors-ligne — annulation mise en file', 'err');
+      toast(libelleFile(err, 'l’annulation'), 'err');
       renderCoursesScreen();
     } else {
       toast(describeError(err), 'err');
@@ -374,11 +458,13 @@ async function renderCuisineScreen() {
   const cached = store.getCachedCuisine();
   const hadCache = !!(cached && cached.cuisine);
   if (hadCache) { CuisineData = cached.cuisine; renderCuisine(appEl, cached.cuisine, cuisineHandlers); }
-  else loadingMsg('Chargement de la cuisine…');
+  else squelette('cuisine');
+  if (hadCache && estFrais('cuisine')) return;
   syncing(true);
   try {
     const data = await getCuisine();
     store.cacheCuisine(data);
+    vuLe.cuisine = Date.now();
     const changed = !hadCache || !sameData(data, cached.cuisine);
     CuisineData = data;
     if (currentScreen === 'cuisine' && changed) renderCuisine(appEl, data, cuisineHandlers);
@@ -403,16 +489,20 @@ async function cuisinerBatch(rec) {
   const poids = Number(rec.poids_produit_g) || 0;
   const id = opId();
   try {
-    await logBatch(ref, id);
+    const res = await logBatch(ref, id);
     const label = poids ? `+${num(Math.round(poids))} g` : 'cuisiné';
     toast(`${rec.nom} — ${label}`, 'ok');
-    M = null;                                 // le stock du plat batch a changé → Aujourd'hui se rechargera
+    // Le stock arrive avec la réponse ; la « dernière réalisation » et les
+    // compteurs de l'écran Cuisine, eux, ne sont que dans le payload `cuisine` —
+    // on ne le redemande donc que si cet écran est bien celui qu'on regarde.
+    if (res && res.state) adopter(res.state); else M = null;
+    perimer('cuisine', 'courses');       // fournée en stock, ingrédients consommés
     if (IS_DEMO) { bumpCuisineLocal(rec, poids); renderCuisine(appEl, CuisineData, cuisineHandlers); }
-    else renderCuisineScreen();               // recharge la vérité backend (stock, dernière réalisation, compteurs)
+    else if (currentScreen === 'cuisine') renderCuisineScreen();
   } catch (err) {
     if (isOffline(err)) {
       enqueue({ action: 'log', type: 'batch_cuisine', ref, op_id: id });
-      toast('Hors-ligne — cuisine mise en file', 'err');
+      toast(libelleFile(err, 'la cuisine'), 'err');
     } else {
       toast(describeError(err), 'err');
       renderCuisine(appEl, CuisineData, cuisineHandlers);   // réactive le bouton désactivé
@@ -444,11 +534,13 @@ async function renderBilanScreen() {
   const cached = store.getCachedBilan();
   const hadCache = !!(cached && cached.bilan);
   if (hadCache) renderBilan(appEl, cached.bilan);
-  else loadingMsg('Chargement du bilan…');
+  else squelette('bilan');
+  if (hadCache && estFrais('bilan')) return;
   syncing(true);
   try {
     const data = await getBilan();
     store.cacheBilan(data);
+    vuLe.bilan = Date.now();
     const changed = !hadCache || !sameData(data, cached.bilan);
     if (currentScreen === 'bilan' && changed) renderBilan(appEl, data);
   } catch (err) {
@@ -471,7 +563,7 @@ async function renderBilanScreen() {
 const handlers = {
   onCommit: (changes) => commitChanges(changes),   // validation de l'inventaire
   onExterieur: (macros) => exterieurAction(macros),
-  onRanger: () => openRanger(M ? M.foods : [], rangerAction),
+  onRanger: async () => (await charger('ranger')).openRanger(M ? M.foods : [], rangerAction),
   onSupprimerEntree: (entree) => supprimerEntree(entree),   // ✕ du résumé du jour
 };
 
@@ -502,13 +594,14 @@ async function supprimerEntree(e) {
   try {
     const data = await annulerExterieur(e.rang, e.kcal, id);
     toast('Repas extérieur retiré', 'ok');
+    perimer('bilan');
     if (data && data.state) adopter(data.state);
     else await reconcile();                    // mode démo : pas d'état renvoyé
   } catch (err) {
     // Pas de mise en file hors-ligne : `rang` désigne une position dans le
     // journal du jour, et rejouer plus tard une annulation calculée sur un
     // journal périmé retirerait le mauvais repas. On demande de réessayer.
-    toast(isOffline(err) ? 'Hors-ligne — réessaie une fois connecté' : describeError(err), 'err');
+    toast(describeError(err), 'err');
     throw err;                                 // la ligne se dégèle côté écran
   } finally {
     syncing(false);
@@ -519,9 +612,11 @@ async function supprimerEntree(e) {
  *  de filtre en dépendent). Pas de file offline : ranger n'est pas urgent, et
  *  rejouer un rangement obsolète écraserait un choix plus récent. */
 async function rangerAction(items) {
-  await setCategories(items);                      // l'erreur remonte → la feuille l'affiche
-  M = null;
-  refreshCurrent();
+  const res = await setCategories(items);          // l'erreur remonte → la feuille l'affiche
+  // `state` ET `catalog` reviennent avec la réponse : ranger change les
+  // pastilles de filtre, ce qui obligeait à redemander un `boot` complet.
+  if (res && res.state) adopter(res.state, res.catalog);
+  else { M = null; refreshCurrent(); }
 }
 
 /**
@@ -559,6 +654,7 @@ async function commitChanges(changes, { libelle = '' } = {}) {
     const data = await postCommit(payload, id);
     const n = changes.length;
     toast(libelle || `${n} aliment${n > 1 ? 's' : ''} mis à jour`, 'ok');
+    perimer('courses', 'bilan');          // stock entamé, apports du jour comptés
     if (data && data.state) adopter(data.state);
     else await reconcile();               // mode démo : pas d'état renvoyé
     if (data && data.ignores && data.ignores.length) {
@@ -570,7 +666,7 @@ async function commitChanges(changes, { libelle = '' } = {}) {
       // Même op_id que la tentative perdue : si elle était en fait passée, le
       // rejeu sera sans effet côté backend.
       enqueue({ action: 'commit', op_id: id, changes: payload });
-      toast('Hors-ligne — validation mise en file', 'err');
+      toast(libelleFile(err, 'la validation'), 'err');
       paint();                            // les lignes concernées passent « en attente »
       return { repaint: true };
     }
@@ -588,9 +684,11 @@ async function exterieurAction(macros) {
   const id = opId();
   syncing(true);
   try {
-    await logExterieur(macros, id);
+    const res = await logExterieur(macros, id);
     toast('Repas extérieur ajouté', 'ok');
+    perimer('bilan');
     if (IS_DEMO) { applyMacros(M.state, macros, 1, +1); paint(); }  // fixture statique
+    else if (res && res.state) adopter(res.state);
     else await reconcile();
   } catch (err) {
     if (isOffline(err)) {
@@ -598,7 +696,7 @@ async function exterieurAction(macros) {
       // Pas de bump optimiste des jauges : un repas en file n'est pas encore
       // compté par le serveur, et l'afficher comme acquis est précisément ce
       // qui rendait l'état local et l'état distant impossibles à départager.
-      toast('Hors-ligne — repas mis en file', 'err');
+      toast(libelleFile(err, 'le repas'), 'err');
       paint();
     } else {
       toast(describeError(err), 'err');
@@ -666,13 +764,17 @@ async function restockAction(food, unites) {
   // Aucun +stock local avant la réponse : tant que le serveur n'a pas confirmé,
   // le stock affiché reste le sien (règle du 2026-08-13).
   try {
-    await logCourses([{ produit_id: food.id, unites: n }], id);
+    const res = await logCourses([{ produit_id: food.id, unites: n }], id);
     toast(`${food.nom} — +${num(Math.round(grammes))} g`, 'ok');
-    M = null; CoursesData = null; refreshCurrent();
+    // La liste de courses, elle, se recalcule côté serveur : on la relit
+    // seulement si elle est à l'écran. Sinon le prochain passage s'en chargera.
+    perimer('courses');
+    if (res && res.state) { adopter(res.state); if (currentScreen !== 'today') refreshCurrent(); }
+    else { M = null; refreshCurrent(); }
   } catch (err) {
     if (isOffline(err)) {
       enqueue({ action: 'log', type: 'courses', items: [{ produit_id: food.id, unites: n }], source: 'scan', op_id: id });
-      toast('Hors-ligne — ajout mis en file', 'err');
+      toast(libelleFile(err, 'l’ajout'), 'err');
       if (currentScreen === 'today') paint();
     } else {
       toast(describeError(err), 'err');
@@ -685,13 +787,15 @@ async function restockAction(food, unites) {
 async function potFiniAction(food) {
   const id = opId();
   try {
-    await logPotFini(food.id, id);
+    const res = await logPotFini(food.id, id);
     toast(`${food.nom} — pot fini`, 'ok');
-    M = null; refreshCurrent();
+    perimer('courses');   // le produit repasse en besoin
+    if (res && res.state) { adopter(res.state); if (currentScreen !== 'today') refreshCurrent(); }
+    else { M = null; refreshCurrent(); }
   } catch (err) {
     if (isOffline(err)) {
       enqueue({ action: 'log', type: 'pot_fini', ref: food.id, source: 'scan', op_id: id });
-      toast('Hors-ligne — « pot fini » mis en file', 'err');
+      toast(libelleFile(err, '« pot fini »'), 'err');
       if (currentScreen === 'today') paint();
     } else {
       toast(describeError(err), 'err');
@@ -703,7 +807,9 @@ async function potFiniAction(food) {
 /** Ajout au catalogue depuis une fiche OpenFoodFacts validée. */
 async function addProduitAction(fiche) {
   const res = await addProduit(fiche);   // l'erreur remonte → la feuille l'affiche
-  M = null; CoursesData = null; refreshCurrent();
+  perimer('courses');
+  if (res && res.state) { adopter(res.state, res.catalog); if (currentScreen !== 'today') refreshCurrent(); }
+  else { M = null; refreshCurrent(); }
   return res;
 }
 
@@ -911,9 +1017,11 @@ document.querySelectorAll('.tab').forEach((t) =>
   t.addEventListener('click', () => setScreen(t.dataset.screen)));
 
 $('#btn-settings').addEventListener('click', () => openSettings());
-$('#btn-scan').addEventListener('click', () => openScan(scanContext));
-fab.addEventListener('click', () => {
-  if (M) openQuoiManger(M.state, M.foods, (food) => scrollToFood(food.id));
+$('#btn-scan').addEventListener('click', async () => (await charger('scan')).openScan(scanContext));
+fab.addEventListener('click', async () => {
+  if (!M) return;
+  const { openQuoiManger } = await charger('quoimanger');
+  openQuoiManger(M.state, M.foods, (food) => scrollToFood(food.id));
 });
 
 // Badge « en attente » : rejeu manuel de la file (utile si l'event `online` a raté).
@@ -945,6 +1053,91 @@ function scrollToFood(id) {
   setTimeout(() => el.classList.remove('flash'), 1500);
 }
 
+/* ------------------------------------------------------------------ */
+/* Tirer pour rafraîchir                                               */
+/* ------------------------------------------------------------------ */
+/**
+ * Contrepartie de la fenêtre de fraîcheur : puisque l'app ne redemande plus le
+ * serveur à chaque retour d'onglet, il faut un moyen de le faire exprès. Le
+ * geste est celui que tout le monde connaît, et il ne prend aucune place à
+ * l'écran — contrairement à un bouton, qui aurait dû cohabiter avec la barre de
+ * validation, le FAB et la barre du bas.
+ *
+ * `overscroll-behavior-y: none` (feuille de style) empêche le rebond natif :
+ * la page ne bouge pas sous le doigt, seul l'indicateur descend.
+ */
+const PTR_SEUIL = 68;
+function installerPullToRefresh() {
+  const ind = h('div', { class: 'ptr', hidden: true, 'aria-hidden': 'true' },
+    h('span', { class: 'ptr__ico' }, '↻'));
+  document.body.append(ind);
+
+  let depart = null;
+  let tire = 0;
+
+  const ranger = () => {
+    ind.hidden = true;
+    ind.style.transform = '';
+    ind.classList.remove('is-arme', 'is-actif');
+    depart = null; tire = 0;
+  };
+
+  document.addEventListener('touchstart', (e) => {
+    // Uniquement en haut de page, un seul doigt, et pas par-dessus une feuille
+    // modale ouverte (le geste y voudrait dire « fermer », pas « recharger »).
+    if (e.touches.length !== 1 || window.scrollY > 0 || sheetRoot.firstChild) { depart = null; return; }
+    depart = e.touches[0].clientY;
+    tire = 0;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', (e) => {
+    if (depart == null) return;
+    const dy = e.touches[0].clientY - depart;
+    if (dy <= 0 || window.scrollY > 0) { ranger(); return; }
+    // Résistance : le doigt parcourt deux fois la distance de l'indicateur, ce
+    // qui rend l'armement volontaire et évite les déclenchements au défilement.
+    tire = Math.min(dy * 0.5, 92);
+    ind.hidden = false;
+    ind.style.transform = `translateX(-50%) translateY(${tire}px) rotate(${tire * 3}deg)`;
+    ind.classList.toggle('is-arme', tire >= PTR_SEUIL);
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => {
+    if (depart == null) return;
+    if (tire < PTR_SEUIL) { ranger(); return; }
+    depart = null;
+    ind.style.transform = 'translateX(-50%) translateY(46px)';
+    ind.classList.add('is-actif');
+    forcerRechargement = true;
+    Promise.resolve(refreshCurrent())
+      .catch(() => {})
+      .finally(() => { forcerRechargement = false; ranger(); });
+  });
+}
+
+/**
+ * Précharge en fond les écrans qu'on n'a pas encore ouverts, une fois
+ * Aujourd'hui peint. Un onglet visité pour la première fois affichait un
+ * squelette puis attendait la réponse ; ici la donnée est déjà là quand le
+ * doigt arrive. Silencieux et sans conséquence s'il échoue.
+ */
+async function prechargerOnglets() {
+  if (IS_DEMO || !store.hasToken() || !navigator.onLine) return;
+  const manquants = [
+    ['courses', store.getCachedCourses(), getCourses, store.cacheCourses],
+    ['bilan', store.getCachedBilan(), getBilan, store.cacheBilan],
+  ].filter(([nom, cache]) => !cache && !estFrais(nom));
+  // En série, pas en parallèle : deux requêtes simultanées vers Apps Script se
+  // gênent plus qu'elles ne s'aident, et rien ne presse ici.
+  for (const [nom, , charger, cacher] of manquants) {
+    try {
+      const data = await charger();
+      cacher.call(store, data);
+      vuLe[nom] = Date.now();
+    } catch { /* le prochain passage sur l'onglet réessaiera */ }
+  }
+}
+
 window.addEventListener('online', async () => {
   updateQueueBadge();
   const res = await syncQueue({ silent: true });   // rejoue la file au retour réseau
@@ -955,6 +1148,10 @@ window.addEventListener('offline', () => updateQueueBadge());
 // Boot : badge, service worker (hors localhost), puis rejeu silencieux de la file.
 updateQueueBadge();
 registerServiceWorker(showUpdatePopin);
+installerPullToRefresh();
 setScreen('today');
 syncQueue({ silent: true });
 verifierVersionPage();     // cache plus récent que la page ouverte → propose le rechargement
+// Les autres onglets se chargent pendant qu'on regarde ses jauges : leur
+// première ouverture est alors instantanée, au lieu d'un squelette + 2 s.
+setTimeout(prechargerOnglets, 2500);

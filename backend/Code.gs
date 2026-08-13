@@ -1512,14 +1512,38 @@ function setCategorie_(p) {
   return { ranges: n };
 }
 
-/** Ajustement manuel de stock (secours). */
+/**
+ * Ajustement manuel de stock (secours), à l'unité ou par LOT.
+ *
+ * Le lot (`items: [{ref, delta}]`) existe depuis le 2026-08-13 : annuler des
+ * courses de dix articles envoyait dix POST concurrents, qui se disputaient le
+ * verrou d'écriture un par un — dix exécutions Apps Script en file, chacune à
+ * plusieurs secondes. Un seul appel prend le verrou une fois, écrit ses lignes
+ * d'un bloc et applique les deltas de stock en une passe.
+ */
 function ajustement_(p, now) {
-  if (!p.ref) throw new Error('ref requis.');
-  var delta = Number(p.delta);
-  if (isNaN(delta)) throw new Error('delta numérique requis.');
-  adjustStock_(p.ref, delta);
-  appendRow_('log', { timestamp: now, type: 'ajustement', ref: p.ref, quantite: delta, source: p.source || 'manuel' });
-  return { ajuste: p.ref, delta: delta };
+  var items = Array.isArray(p.items) && p.items.length
+    ? p.items
+    : [{ ref: p.ref, delta: p.delta }];
+
+  var deltas = {};
+  var lignes = [];
+  var ajustes = [];
+  items.forEach(function (it) {
+    var ref = trim_((it && it.ref) || '');
+    var delta = Number(it && it.delta);
+    if (!ref) throw new Error('ref requise pour chaque ajustement.');
+    if (isNaN(delta)) throw new Error('delta numérique requis pour ' + ref + '.');
+    if (!delta) return;
+    deltas[ref] = (deltas[ref] || 0) + delta;
+    lignes.push({ timestamp: now, type: 'ajustement', ref: ref, quantite: delta,
+      source: p.source || 'manuel' });
+    ajustes.push({ ref: ref, delta: delta });
+  });
+
+  appendRows_('log', lignes);
+  appliquerDeltas_(deltas);
+  return { ajustes: ajustes, ajuste: ajustes.length === 1 ? ajustes[0].ref : null };
 }
 
 /**

@@ -37,6 +37,18 @@ export const store = {
     write(KEY.courses, JSON.stringify({ at: Date.now(), courses }));
   },
   getCachedCourses() { return readJSON(KEY.courses, null); },
+
+  /**
+   * Jette un cache d'écran devenu faux (une réappro change la liste de courses,
+   * un batch cuisiné change la cuisine). Le supprimer plutôt que d'y écrire
+   * `null` : `getCached*` teste la présence de la charge, et un `{courses:null}`
+   * se comporterait comme un cache vide tout en occupant la place.
+   */
+  clearCache(nom) {
+    const k = KEY[nom];
+    if (!k) return;
+    try { localStorage.removeItem(k); } catch { /* mode privé */ }
+  },
   cacheCuisine(cuisine) {
     write(KEY.cuisine, JSON.stringify({ at: Date.now(), cuisine }));
   },
@@ -123,7 +135,12 @@ export const store = {
       const p = it.payload || {};
       if (p.ref) refs.add(String(p.ref));
       for (const c of p.changes || []) if (c && c.ref) refs.add(String(c.ref));
-      for (const i of p.items || []) if (i && i.produit_id) refs.add(String(i.produit_id));
+      // `items` porte `produit_id` sur les courses et `ref` sur les ajustements
+      // groupés (2026-08-13) : les deux verrouillent la ligne concernée.
+      for (const i of p.items || []) {
+        if (i && i.produit_id) refs.add(String(i.produit_id));
+        if (i && i.ref) refs.add(String(i.ref));
+      }
     }
     return refs;
   },

@@ -25,25 +25,97 @@ async function parseResponse(res) {
   return json.data;
 }
 
+/* ------------------------------------------------------------------ */
+/* Requête doublée — la parade à la latence d'Apps Script              */
+/* ------------------------------------------------------------------ */
 /**
- * Apps Script répond en 1 à 3 s, mais une requête peut aussi ne jamais revenir
- * (réseau mobile qui bascule, onglet réveillé). Sans borne, l'app restait figée
- * sur « Enregistrement… » sans fin. Le délai dépassé est TRANSITOIRE : l'écriture
- * a peut-être eu lieu, c'est l'`op_id` qui empêche le rejeu de compter deux fois.
+ * Mesure du 2026-08-13, 12 appels sur le backend déployé, sur une requête qui ne
+ * fait qu'une lecture d'onglet avant de répondre :
+ *
+ *     1,9  36,6  1,8  3,6  32,2  3,0  2,0  34,1  22,1  1,9  1,8  12,4  (secondes)
+ *
+ * Médiane ~2,3 s, mais un appel sur trois dépasse 22 s. En séparant les deux
+ * sauts HTTP, tout le temps part dans le PREMIER (`script.google.com`, où le
+ * script s'exécute) ; le second ne coûte que 0,3 s. C'est de l'ordonnancement
+ * Google — démarrage de conteneur — et aucune optimisation de `Code.gs` ne peut
+ * l'enlever. C'est aussi ce qui faisait dire « Hors-ligne » à l'app : l'ancienne
+ * borne de 25 s tombait pile au milieu de cette queue de distribution.
+ *
+ * Fait décisif : ces appels lents FINISSENT par réussir (JSON correct après 22 et
+ * 34 s). La requête n'est pas perdue, elle attend son tour. On en lance donc une
+ * SECONDE au bout de quelques secondes et on garde la première qui répond : pour
+ * que l'attente reste longue, il faut désormais que les deux tombent dans la
+ * queue lente.
+ *
+ * C'est gratuit sur un GET (idempotent), et sans risque sur un POST grâce à
+ * l'`op_id` : le backend mémorise les opérations déjà appliquées et ne les
+ * rejoue jamais (Code.gs §4). Le doublon d'une écriture est donc un rejeu — il
+ * rapporte l'accusé d'origine et l'état frais, sans rien réécrire.
  */
-const TIMEOUT_MS = 25000;
-async function fetchBorne(url, options = {}) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...options, signal: ctrl.signal });
-  } catch (e) {
-    throw new ApiError(
-      e && e.name === 'AbortError' ? 'Le serveur met trop de temps à répondre' : 'Réseau indisponible',
-      'network');
-  } finally {
-    clearTimeout(t);
-  }
+const DOUBLON_LECTURE_MS = 6000;
+// Plus tardif sur une écriture : le doublon attend le verrou du backend, il ne
+// sert donc à rien de le lancer tant que l'original a des chances d'aboutir.
+const DOUBLON_ECRITURE_MS = 12000;
+// Budget total avant d'abandonner. Large exprès : on sait maintenant qu'une
+// réponse peut mettre 35 s à venir, et abandonner à 25 s revenait à jeter une
+// requête qui allait aboutir.
+const BUDGET_MS = 45000;
+
+/** `navigator.onLine` ment sur le « vrai », jamais sur le « faux » : un `false`
+ *  signifie l'interface réseau coupée. Un `true` avec un échec pointe donc vers
+ *  le serveur, et le dire évite d'annoncer « Hors-ligne » à quelqu'un de
+ *  parfaitement connecté — le reproche exact d'Azur le 2026-08-13. */
+function erreurReseau(avorte) {
+  const enLigne = navigator.onLine !== false;
+  const err = new ApiError(
+    enLigne
+      ? (avorte ? 'Le serveur Google ne répond pas (il est parfois très lent)'
+                : 'Le serveur Enthalpie est injoignable')
+      : 'Pas de connexion',
+    'network');
+  err.enLigne = enLigne;
+  return err;
+}
+
+function fetchDouble(url, options = {}, doublonMs = DOUBLON_LECTURE_MS) {
+  return new Promise((resolve, reject) => {
+    const ctrls = [];
+    let reglee = false;
+    let enVol = 0;
+    let avorte = false;
+    let tDoublon = null;
+
+    // Le contrôleur GAGNANT ne doit surtout pas être avorté : `fetch` a résolu,
+    // mais le corps n'est pas encore lu (`res.json()` vient après) — l'avorter
+    // ferait échouer la lecture de la réponse qu'on vient de gagner.
+    const finir = (fn, valeur, gagnant) => {
+      if (reglee) return;
+      reglee = true;
+      clearTimeout(tDoublon);
+      clearTimeout(tBudget);
+      ctrls.forEach((c) => { if (c !== gagnant) { try { c.abort(); } catch { /* déjà fini */ } } });
+      fn(valeur);
+    };
+
+    const tBudget = setTimeout(() => { avorte = true; finir(reject, erreurReseau(true)); }, BUDGET_MS);
+
+    const lancer = () => {
+      const c = new AbortController();
+      ctrls.push(c);
+      enVol++;
+      fetch(url, { ...options, signal: c.signal }).then(
+        (res) => { enVol--; finir(resolve, res, c); },
+        () => {
+          enVol--;
+          // Une tentative avortée parce que l'autre a gagné n'est pas un échec ;
+          // on n'abandonne que quand plus rien n'est en vol.
+          if (!reglee && enVol === 0) finir(reject, erreurReseau(avorte));
+        });
+    };
+
+    lancer();
+    tDoublon = setTimeout(() => { if (!reglee) lancer(); }, doublonMs);
+  });
 }
 
 /**
@@ -63,7 +135,7 @@ export async function apiGet(action, params = {}) {
   url.searchParams.set('token', token);
   url.searchParams.set('action', action);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetchBorne(url.toString(), { method: 'GET', redirect: 'follow' });
+  const res = await fetchDouble(url.toString(), { method: 'GET', redirect: 'follow' });
   return parseResponse(res);
 }
 
@@ -95,12 +167,20 @@ export async function apiPost(body) {
   }
   const token = store.getToken();
   if (!token) throw new ApiError('Token manquant', 'noauth');
-  const res = await fetchBorne(store.getApiBase(), {
+  // Un `op_id` sur TOUTE écriture : c'est lui qui rend la requête doublée sans
+  // danger. Le frapper ici est correct — `apiPost` n'est appelée qu'une fois par
+  // action, les deux tentatives partagent donc le même identifiant, et le
+  // backend n'applique la seconde nulle part. Les appels qui en fournissent
+  // déjà un (file offline rejouée, `commit`) gardent le leur : en changer
+  // ferait recompter une écriture qui avait abouti.
+  const corps = { token, ...body };
+  if (!corps.op_id) corps.op_id = opId();
+  const res = await fetchDouble(store.getApiBase(), {
     method: 'POST',
     redirect: 'follow',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ token, ...body }),
-  });
+    body: JSON.stringify(corps),
+  }, DOUBLON_ECRITURE_MS);
   return parseResponse(res);
 }
 
@@ -125,6 +205,13 @@ export const postLog     = (payload) => apiPost({ action: 'log', ...payload });
 export const logProduit  = (ref, quantite, id) => postLog({ type: 'produit', ref, quantite, op_id: id });
 export const logPlat     = (ref, quantite = 1, id) => postLog({ type: 'plat', ref, quantite, op_id: id });
 export const adjustStock = (ref, delta, id) => postLog({ type: 'ajustement', ref, delta, op_id: id });
+/**
+ * Ajustements groupés : `items` = [{ref, delta}] en grammes signés. Un seul
+ * POST, donc une seule prise du verrou côté backend — annuler un lot de courses
+ * envoyait auparavant un POST par article, qui se mettaient en file les uns
+ * derrière les autres (2026-08-13).
+ */
+export const adjustStockLot = (items, id) => postLog({ type: 'ajustement', items, op_id: id });
 export const logCourses  = (items, id) => postLog({ type: 'courses', items, op_id: id });
 export const logPotFini  = (ref, id) => postLog({ type: 'pot_fini', ref, source: 'scan', op_id: id });
 export const logBatch    = (ref, id) => postLog({ type: 'batch_cuisine', ref, op_id: id });

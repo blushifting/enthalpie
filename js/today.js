@@ -2,8 +2,15 @@
 // Modèle inventaire : chaque curseur = PART DU PAQUET EN COURS déjà consommée
 // (0 → 100 %). Sa position est dérivée du stock, donc elle persiste après
 // validation : on la fait avancer au fil de la semaine, et la reculer corrige
-// une saisie erronée (remise au stock). Un seul bouton « Valider ».
+// une saisie erronée (remise au stock ET retrait des apports du jour).
+// Un seul bouton « Valider ».
 // Tout est en grammes ; les macros du catalogue sont pour 100 g.
+//
+// Règle depuis le 2026-08-13 : **l'écran n'affiche jamais un stock que le
+// serveur n'a pas confirmé.** Pendant l'envoi les lignes sont gelées ; si le
+// lot part en file (hors-ligne), elles restent gelées avec le stock du serveur
+// et un badge « en attente ». Empiler une saisie sur un état local non
+// synchronisé était la cause des quantités comptées deux fois.
 import { h, clear, num, numEntier, thumbOnlySlider } from './util.js';
 import { REPLI_CIBLES, CATEGORIES } from './config.js';
 import { normaliser } from './categories.js';
@@ -158,7 +165,7 @@ function infoBlock(food, meta) {
  *  zéro après validation : elle reste là où le stock l'amène, et le reculer
  *  corrige une erreur de saisie.
  *  Renvoie une API {el, isDirty, reset, getChange}. */
-function invRow(food, onChange) {
+function invRow(food, onChange, enAttente = false) {
   const meta = stockMeta(food);
   const m = food.macros || {};
   // Référence des 100 % du curseur : un paquet, ou à défaut le stock restant.
@@ -185,12 +192,19 @@ function invRow(food, onChange) {
     ? CRANS_PAQUET
     : [...CRANS_PAQUET, depart].sort((a, b) => a - b);
 
-  const row = h('div', { class: 'inv-row', id: `food-${food.id}` },
+  // Ligne gelée : une modification de cet aliment attend encore de partir. Le
+  // stock affiché est celui du serveur, il ne tient donc PAS compte de ce qui
+  // est en file — rejouer un curseur par-dessus rejouerait la même consommation
+  // en double, ce qui est exactement le bug du 2026-08-13.
+  if (enAttente) slider.disabled = true;
+
+  const row = h('div', { class: `inv-row ${enAttente ? 'is-attente' : ''}`, id: `food-${food.id}` },
     h('div', { class: 'inv-row__top' },
       h('span', { class: 'inv-row__nom' }, food.nom),
       level,
     ),
     infoBlock(food, meta),
+    enAttente ? h('div', { class: 'inv-row__attente' }, '⏳ modification en attente de synchro') : null,
     thumbOnlySlider(slider, crans),
     delta,
   );
@@ -227,9 +241,15 @@ function invRow(food, onChange) {
       delta.textContent = `🍽 ${dp} % du paquet · ${num(Math.round(m.kcal * r))} kcal · `
         + `${num(Math.round(m.prot_g * r * 10) / 10)} g prot`;
     } else {
-      // Reculer le curseur = « je n'avais pas mangé ça » → remise au stock.
+      // Reculer le curseur = « je n'avais pas mangé ça » : remise au stock ET
+      // retrait des apports du jour (2026-08-13 — avant, seul le stock revenait
+      // et les calories restaient acquises).
+      // « jusqu'à » : le backend ne peut annuler que ce qui a été logué
+      // AUJOURD'HUI pour cet aliment ; corriger ce matin une saisie d'hier rend
+      // le stock sans creuser les jauges du jour, ce qui est le comportement juste.
       delta.className = 'inv-row__delta is-undo';
-      delta.textContent = `↩ correction : ${-dp} % rendus au stock`;
+      delta.textContent = `↩ correction : ${-dp} % rendus au stock · `
+        + `jusqu'à ${num(Math.round(m.kcal * r))} kcal retirés du jour`;
     }
     delta.hidden = false;
   }
@@ -245,6 +265,13 @@ function invRow(food, onChange) {
     // aliments de la semaine en cours, donc ceux qu'on cherche en premier.
     entame: meta.pct > 0,
     isDirty: dirty,
+    enAttente,
+    // Gel le temps de l'aller-retour : un curseur qui bouge pendant l'envoi ne
+    // correspondrait plus au lot parti. Une ligne déjà en attente reste gelée.
+    lock(on) {
+      if (!enAttente) slider.disabled = !!on;
+      row.classList.toggle('is-envoi', !!on);
+    },
     // Annuler = revenir à la position que le stock impose, pas à zéro.
     reset() { slider.value = String(depart); renderLevel(); },
     getChange() {
@@ -258,18 +285,28 @@ function invRow(food, onChange) {
 /** Barre de validation (visible dès qu'il y a des modifications). */
 function validateBar(onValider, onAnnuler) {
   const count = h('span', { class: 'valbar__count' });
+  const annuler = h('button', { class: 'valbar__annuler', type: 'button', onclick: onAnnuler }, 'Annuler');
+  const valider = h('button', { class: 'valbar__valider', type: 'button', onclick: onValider }, 'Valider');
   const bar = h('div', { class: 'valbar', hidden: true },
     h('span', { class: 'valbar__info' }, h('span', { class: 'valbar__dot' }), count),
-    h('div', { class: 'valbar__actions' },
-      h('button', { class: 'valbar__annuler', type: 'button', onclick: onAnnuler }, 'Annuler'),
-      h('button', { class: 'valbar__valider', type: 'button', onclick: onValider }, 'Valider'),
-    ),
+    h('div', { class: 'valbar__actions' }, annuler, valider),
   );
+  let n = 0;
+  const libelle = () => `${n} aliment${n > 1 ? 's' : ''} modifié${n > 1 ? 's' : ''}`;
   return {
     el: bar,
-    set(n) {
+    set(v) {
+      n = v;
       bar.hidden = n === 0;
-      count.textContent = `${n} aliment${n > 1 ? 's' : ''} modifié${n > 1 ? 's' : ''}`;
+      count.textContent = libelle();
+    },
+    /** Envoi en cours : la barre dit ce qui se passe et se refuse au double tap. */
+    envoi(on) {
+      bar.classList.toggle('is-envoi', !!on);
+      annuler.disabled = !!on;
+      valider.disabled = !!on;
+      valider.textContent = on ? 'Enregistrement…' : 'Valider';
+      count.textContent = on ? 'Envoi au serveur…' : libelle();
     },
   };
 }
@@ -384,16 +421,28 @@ function exterieurBlock(exterieurs, onExterieur) {
 
 /**
  * @param root  conteneur
- * @param model { state, foods:[{id,nom,kind,macros,stock,paquet}], exterieurs:[...] }
- * @param handlers { onCommit(changes), onExterieur(macros) }
+ * @param model { state, foods:[{id,nom,kind,macros,stock,paquet}], exterieurs:[...],
+ *                pending:Set<string> — refs dont une modification attend de partir }
+ * @param handlers { onCommit(changes) → {repaint}, onExterieur(macros) }
  */
 export function renderToday(root, model, handlers) {
   clear(root);
   const { state, foods, exterieurs } = model;
+  const pending = model.pending || new Set();
   const fab = document.getElementById('btn-quoi-manger');
 
   if (state.__offline) {
     root.append(h('div', { class: 'offline-banner' }, '⚡ Hors-ligne — données du dernier chargement'));
+  }
+
+  // Tout ce qui est affiché vient du serveur. Ce qui attend encore de partir
+  // n'est donc compté NULLE PART à l'écran : le dire est la seule façon de ne
+  // pas laisser croire que les jauges et le stock sont à jour.
+  if (pending.size) {
+    root.append(h('div', { class: 'pending-banner' },
+      h('span', {}, `⏳ ${pending.size} aliment${pending.size > 1 ? 's' : ''} en attente de synchro`),
+      h('span', { class: 'pending-banner__sub' },
+        'Les chiffres ci-dessous sont ceux du serveur : ils ne comptent pas encore ces modifications.')));
   }
 
   root.append(h('p', { class: 'day-caption' }, 'Apports du jour'));
@@ -439,7 +488,7 @@ export function renderToday(root, model, handlers) {
   }
 
   const bar = validateBar(() => onValider(), () => onAnnuler());
-  const rows = ordered.map((f) => invRow(f, () => updateBar()));
+  const rows = ordered.map((f) => invRow(f, () => updateBar(), pending.has(String(f.id))));
 
   // Les lignes sont construites UNE fois et se contentent de se masquer : un
   // curseur déplacé puis filtré garde sa position (reconstruire la liste la
@@ -490,9 +539,30 @@ export function renderToday(root, model, handlers) {
     if (fab) fab.hidden = n > 0;           // le FAB s'efface tant qu'il y a des modifs
   }
   function onAnnuler() { rows.forEach((r) => r.reset()); updateBar(); }
-  function onValider() {
+
+  /**
+   * Envoi : l'écran se gèle jusqu'à la réponse plutôt que d'afficher un stock
+   * que le serveur n'a pas encore vu. `repaint` dit si l'app a repeint depuis
+   * l'état frais — sinon on rend la main avec les curseurs INTACTS, pour que la
+   * saisie survive à un refus et puisse être retentée.
+   */
+  let envoiEnCours = false;
+  async function onValider() {
+    if (envoiEnCours) return;
     const changes = rows.map((r) => r.getChange()).filter(Boolean);
-    if (changes.length) handlers.onCommit(changes);
+    if (!changes.length) return;
+    envoiEnCours = true;
+    bar.envoi(true);
+    rows.forEach((r) => r.lock(true));
+    let res;
+    try { res = await handlers.onCommit(changes); }
+    finally {
+      envoiEnCours = false;
+      if (!res || !res.repaint) {          // l'écran n'a pas été refait : on dégèle
+        rows.forEach((r) => r.lock(false));
+        bar.envoi(false);
+      }
+    }
   }
   updateBar();
   appliquer(filtres.actif(), '');

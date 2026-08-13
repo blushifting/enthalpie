@@ -36,7 +36,12 @@ function isPermanent(err) {
 /**
  * Rejoue la file de log séquentiellement (FIFO, ordre préservé).
  * Retire chaque item au succès ; s'arrête à la première erreur transitoire.
- * @returns {Promise<{sent:number, dropped:number, remaining:number}>}
+ *
+ * Le rejeu est SANS RISQUE depuis le 2026-08-13 : chaque item porte un `op_id`
+ * que le backend mémorise. Avant, une réponse perdue (Apps Script est lent et
+ * répond derrière une redirection) faisait rejouer une écriture pourtant
+ * appliquée — d'où des quantités comptées deux fois.
+ * @returns {Promise<{sent:number, dropped:number, remaining:number, state:object|null}>}
  */
 export async function flushQueue({ silent = false } = {}) {
   if (IS_DEMO) return { sent: 0, dropped: 0, remaining: 0 };
@@ -49,6 +54,7 @@ export async function flushQueue({ silent = false } = {}) {
   flushing = true;
   let sent = 0;
   let dropped = 0;
+  let state = null;      // dernier état frais renvoyé par un `commit` rejoué
   try {
     // On relit la file à chaque tour et on retire l'item traité PAR ID : une
     // action enfilée pendant l'await réseau est ainsi préservée (pas écrasée).
@@ -57,7 +63,10 @@ export async function flushQueue({ silent = false } = {}) {
       if (!q.length) break;
       const item = q[0];
       try {
-        await apiPost(item.payload);
+        // `op_id` = l'id de l'item : rejouer une action déjà appliquée (réponse
+        // perdue à la première tentative) est sans effet côté backend.
+        const data = await apiPost({ ...item.payload, op_id: item.id });
+        if (data && data.state) state = data.state;
         sent++;
       } catch (err) {
         if (!isPermanent(err)) break;   // transitoire → on garde l'item, on réessaiera
@@ -76,7 +85,7 @@ export async function flushQueue({ silent = false } = {}) {
     if (dropped) toast(`${dropped} action${dropped > 1 ? 's' : ''} rejetée${dropped > 1 ? 's' : ''} par le serveur`, 'err');
     else if (!sent && store.queueSize()) toast('Toujours hors-ligne — file conservée', 'err');
   }
-  return { sent, dropped, remaining: store.queueSize() };
+  return { sent, dropped, remaining: store.queueSize(), state };
 }
 
 /* ------------------------------------------------------------------ */

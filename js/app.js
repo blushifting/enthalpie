@@ -1,7 +1,7 @@
 // Bootstrap : shell, navigation, gate token, chargement state+catalog, handlers.
 import { h, $, clear, toast, num } from './util.js';
 import { store } from './store.js';
-import { getState, getCatalog, getCourses, getCuisine, getBilan, logProduit, logPlat, adjustStock, logCourses, logPotFini, logBatch, logExterieur, addProduit, setCategories, ApiError, IS_DEMO } from './api.js';
+import { getBoot, getCourses, getCuisine, getBilan, postCommit, adjustStock, logCourses, logPotFini, logBatch, logExterieur, addProduit, setCategories, opId, ApiError, IS_DEMO } from './api.js';
 import { renderToday } from './today.js';
 import { renderCourses } from './courses.js';
 import { renderCuisine } from './cuisine.js';
@@ -18,6 +18,7 @@ const fab = $('#btn-quoi-manger');
 
 let currentScreen = 'today';
 let M = null; // modèle courant { state, foods, plats }
+let CatalogData = null; // dernier catalogue brut (pour reconstruire M depuis un state seul)
 let CoursesData = null; // dernière liste de courses chargée
 let CuisineData = null; // dernière cuisine chargée (recette semaine + biblio)
 
@@ -157,8 +158,15 @@ function errorState(message, onRetry) {
     h('button', { class: 'btn btn--primary', style: 'max-width:220px', onclick: onRetry }, 'Réessayer')));
 }
 
+/**
+ * Peint l'écran Aujourd'hui. `pending` = les références qu'une action encore en
+ * file touche : leurs lignes sont verrouillées, parce que le stock affiché pour
+ * elles n'est plus celui du serveur (2026-08-13).
+ */
 function paint() {
-  if (currentScreen === 'today' && M) renderToday(appEl, M, handlers);
+  if (currentScreen === 'today' && M) {
+    renderToday(appEl, { ...M, pending: store.pendingRefs() }, handlers);
+  }
 }
 
 /** Date du jour au format du backend ('yyyy-MM-dd'), en heure locale. */
@@ -182,9 +190,19 @@ function peindreDepuisCache() {
   const cs = store.getCachedState();
   const cc = store.getCachedCatalog();
   if (!cs || !cs.state || !cc || !cc.catalog) return false;
+  CatalogData = cc.catalog;
   M = buildModel({ ...cs.state, __attente: cs.state.date !== isoLocal() }, cc.catalog);
   paint();
   return true;
+}
+
+/** Adopte un couple state/catalog frais : modèle, cache et peinture. */
+function adopter(state, catalog) {
+  if (catalog) { CatalogData = catalog; store.cacheCatalog(catalog); }
+  if (!state || !CatalogData) return;
+  M = buildModel(state, CatalogData);
+  store.cacheState(state);
+  paint();
 }
 
 async function renderTodayScreen() {
@@ -194,11 +212,10 @@ async function renderTodayScreen() {
 
   syncing(true);
   try {
-    const [state, catalog] = await Promise.all([getState(), getCatalog()]);
-    M = buildModel(state, catalog);
-    store.cacheState(state);
-    store.cacheCatalog(catalog);
-    paint();
+    // UN aller-retour au lieu de deux : `state` et `catalog` se lisent dans les
+    // mêmes onglets côté backend, et chaque exécution Apps Script coûte 1 à 3 s.
+    const { state, catalog } = await getBoot();
+    adopter(state, catalog);
   } catch (err) {
     const cs = store.getCachedState();
     const cc = store.getCachedCatalog();
@@ -206,6 +223,7 @@ async function renderTodayScreen() {
       // Même règle qu'en peinture immédiate : le stock d'hier reste vrai, ses
       // jauges non — hors-ligne on ne peut plus les mettre à jour, alors on les
       // laisse en attente plutôt que de dater les apports de la veille.
+      CatalogData = cc.catalog;
       M = buildModel({ ...cs.state, __offline: true, __attente: cs.state.date !== isoLocal() }, cc.catalog);
       paint();
       toast('Hors-ligne — données en cache', 'err');
@@ -276,8 +294,9 @@ async function renderCoursesScreen() {
 /** Valide les articles cochés : POST courses (incrémente le stock côté backend). */
 async function validerCourses(items) {
   if (!items.length) return;
+  const id = opId();
   try {
-    const res = await logCourses(items);
+    const res = await logCourses(items, id);
     const reverse = res && Array.isArray(res.courses_validees)
       ? res.courses_validees.map((a) => ({ produit_id: a.produit_id, grammes: Number(a.grammes) || 0 }))
       : items.map((i) => ({ produit_id: i.produit_id, grammes: Number(i.grammes) || 0 }));
@@ -288,7 +307,7 @@ async function validerCourses(items) {
     if (currentScreen === 'courses') renderCourses(appEl, CoursesData, coursesHandlers); // affiche le bandeau d'annulation
   } catch (err) {
     if (isOffline(err)) {
-      enqueue({ action: 'log', type: 'courses', items });
+      enqueue({ action: 'log', type: 'courses', items, op_id: id });
       toast('Hors-ligne — validation mise en file', 'err');
       // Pas d'annulation hors-ligne : les grammes exacts ne sont connus qu'à la réponse backend.
     } else {
@@ -301,15 +320,19 @@ async function validerCourses(items) {
 async function undoCourses() {
   const last = store.getLastCourses();
   if (!last || !last.reverse || !last.reverse.length) return;
+  // Un op_id PAR ligne, dérivé du lot : le rejeu d'une annulation partiellement
+  // partie ne peut pas re-soustraire ce qui l'a déjà été.
+  const lot = opId();
+  const idDe = (r, i) => `${lot}-${i}`;
   try {
-    await Promise.all(last.reverse.map((r) => adjustStock(r.produit_id, -Number(r.grammes) || 0)));
+    await Promise.all(last.reverse.map((r, i) => adjustStock(r.produit_id, -Number(r.grammes) || 0, idDe(r, i))));
     store.clearLastCourses();
     M = null;
     toast('Dernières courses annulées', 'ok');
     renderCoursesScreen();          // recharge : les articles annulés réapparaissent
   } catch (err) {
     if (isOffline(err)) {
-      last.reverse.forEach((r) => enqueue({ action: 'log', type: 'ajustement', ref: r.produit_id, delta: -Number(r.grammes) || 0 }));
+      last.reverse.forEach((r, i) => enqueue({ action: 'log', type: 'ajustement', ref: r.produit_id, delta: -Number(r.grammes) || 0, op_id: idDe(r, i) }));
       store.clearLastCourses();
       toast('Hors-ligne — annulation mise en file', 'err');
       renderCoursesScreen();
@@ -366,8 +389,9 @@ async function renderCuisineScreen() {
 async function cuisinerBatch(rec) {
   const ref = rec.recette_id || rec.plat_id;
   const poids = Number(rec.poids_produit_g) || 0;
+  const id = opId();
   try {
-    await logBatch(ref);
+    await logBatch(ref, id);
     const label = poids ? `+${num(Math.round(poids))} g` : 'cuisiné';
     toast(`${rec.nom} — ${label}`, 'ok');
     M = null;                                 // le stock du plat batch a changé → Aujourd'hui se rechargera
@@ -375,7 +399,7 @@ async function cuisinerBatch(rec) {
     else renderCuisineScreen();               // recharge la vérité backend (stock, dernière réalisation, compteurs)
   } catch (err) {
     if (isOffline(err)) {
-      enqueue({ action: 'log', type: 'batch_cuisine', ref });
+      enqueue({ action: 'log', type: 'batch_cuisine', ref, op_id: id });
       toast('Hors-ligne — cuisine mise en file', 'err');
     } else {
       toast(describeError(err), 'err');
@@ -448,67 +472,86 @@ async function rangerAction(items) {
 }
 
 /**
- * Valide les mouvements d'inventaire d'un coup : chaque baisse de curseur =
- * consommation (log produit → compte dans les jauges) ; chaque hausse =
- * correction de stock (ajustement, sans impact nutritionnel).
+ * Valide les mouvements d'inventaire — TOUT le lot en un seul POST, dont la
+ * réponse contient déjà l'état frais du serveur.
+ *
+ * Refonte du 2026-08-13, sur trois constats d'usage :
+ *
+ *  1. **On n'affiche plus de stock non synchronisé.** L'ancienne version
+ *     écrivait le nouveau stock dans le modèle AVANT la réponse ; en cas
+ *     d'échec, cet optimisme survivait (rien ne le reprenait dans la branche
+ *     hors-ligne). L'écran montrait alors un stock que le serveur ignorait, et
+ *     toute nouvelle validation partait de ce faux point de départ : les
+ *     quantités s'empilaient. Désormais le stock affiché vient TOUJOURS du
+ *     serveur, et un lot non parti verrouille ses lignes.
+ *  2. **Un curseur reculé retire aussi les macros du jour** (c'est le backend
+ *     qui s'en charge, `commit_`), au lieu de ne rendre que le stock.
+ *  3. **Un aller-retour au lieu de N+2.** Huit aliments valaient huit POST
+ *     concurrents plus deux GET de recalage — d'où la lenteur, et les courses
+ *     entre écritures simultanées sur le même onglet.
+ *
+ * @returns {Promise<{repaint:boolean}>} repaint=true → l'écran a été repeint,
+ *   le DOM de l'appelant est caduc (sinon il garde ses curseurs pour réessayer).
  */
 async function commitChanges(changes) {
-  const snapshot = cloneModel(M);
+  const id = opId();
+  const payload = changes.map((c) => ({
+    ref: c.ref,
+    kind: c.food && c.food.kind === 'plat' ? 'plat' : 'produit',
+    delta: c.delta,                       // grammes signés : > 0 mangé, < 0 correction
+  }));
 
-  // Optimiste : jauges + stock local.
-  for (const c of changes) {
-    // Macros pour 100 g, delta en grammes → facteur delta/100.
-    if (c.delta > 0) applyMacros(M.state, c.macros, c.delta / 100, +1);
-    const f = M.foods.find((x) => x.id === c.ref);
-    if (f) f.stock = Math.round(c.newStock * 1000) / 1000;
-  }
-  paint();
-
-  // Baisse = consommé : un batch cuisiné se logge en `plat` (décrémente son
-  // propre stock), un aliment brut en `produit`. Hausse = correction de stock.
-  const isBatch = (c) => c.food && c.food.kind === 'plat';
-  const ops = changes.map((c) => (c.delta > 0
-    ? (isBatch(c) ? logPlat(c.ref, c.delta) : logProduit(c.ref, c.delta))
-    : adjustStock(c.ref, -c.delta)));
-  const results = await Promise.allSettled(ops);
-  const failed = results.filter((r) => r.status === 'rejected');
-
-  if (!failed.length) {
-    toast(`${changes.length} aliment${changes.length > 1 ? 's' : ''} mis à jour`, 'ok');
-    reconcile();
-  } else if (failed.every((r) => isOffline(r.reason))) {
-    changes.forEach((c, i) => {
-      if (results[i].status === 'rejected') {
-        enqueue(c.delta > 0
-          ? { action: 'log', type: isBatch(c) ? 'plat' : 'produit', ref: c.ref, quantite: c.delta }
-          : { action: 'log', type: 'ajustement', ref: c.ref, delta: -c.delta });
-      }
-    });
-    toast('Hors-ligne — modifications mises en file', 'err');
-  } else {
-    // Échec métier : le serveur fait foi, on recale.
-    toast(describeError(failed[0].reason), 'err');
-    reconcile();
+  syncing(true);
+  try {
+    const data = await postCommit(payload, id);
+    const n = changes.length;
+    toast(`${n} aliment${n > 1 ? 's' : ''} mis à jour`, 'ok');
+    if (data && data.state) adopter(data.state);
+    else await reconcile();               // mode démo : pas d'état renvoyé
+    if (data && data.ignores && data.ignores.length) {
+      toast(`${data.ignores.length} référence(s) inconnue(s) ignorée(s)`, 'err');
+    }
+    return { repaint: true };
+  } catch (err) {
+    if (isOffline(err)) {
+      // Même op_id que la tentative perdue : si elle était en fait passée, le
+      // rejeu sera sans effet côté backend.
+      enqueue({ action: 'commit', op_id: id, changes: payload });
+      toast('Hors-ligne — validation mise en file', 'err');
+      paint();                            // les lignes concernées passent « en attente »
+      return { repaint: true };
+    }
+    // Refus du serveur : rien n'a été écrit, on laisse les curseurs en place
+    // pour que la saisie ne soit pas perdue.
+    toast(describeError(err), 'err');
+    return { repaint: false };
+  } finally {
+    syncing(false);
   }
 }
 
 /** Repas extérieur : macros libres → jauges du jour, sans toucher au stock. */
 async function exterieurAction(macros) {
-  const snapshot = cloneModel(M);
-  applyMacros(M.state, macros, 1, +1);
-  paint();
+  const id = opId();
+  syncing(true);
   try {
-    await logExterieur(macros);
+    await logExterieur(macros, id);
     toast('Repas extérieur ajouté', 'ok');
-    if (!IS_DEMO) reconcile();     // en démo la fixture est statique → garde le bump optimiste
+    if (IS_DEMO) { applyMacros(M.state, macros, 1, +1); paint(); }  // fixture statique
+    else await reconcile();
   } catch (err) {
     if (isOffline(err)) {
-      enqueue({ action: 'log', type: 'exterieur', ...macros });
+      enqueue({ action: 'log', type: 'exterieur', ...macros, op_id: id });
+      // Pas de bump optimiste des jauges : un repas en file n'est pas encore
+      // compté par le serveur, et l'afficher comme acquis est précisément ce
+      // qui rendait l'état local et l'état distant impossibles à départager.
       toast('Hors-ligne — repas mis en file', 'err');
+      paint();
     } else {
-      M = snapshot; paint();
       toast(describeError(err), 'err');
     }
+  } finally {
+    syncing(false);
   }
 }
 
@@ -564,17 +607,20 @@ function foodByEan(ean) {
  */
 async function restockAction(food, unites) {
   const paquet = Math.max(0, Number(food.paquet) || 0);
-  const grammes = Math.max(1, Number(unites) || 1) * paquet;
-  const f = M && M.foods && M.foods.find((x) => x.id === food.id);
-  if (f) { f.stock = (Number(f.stock) || 0) + grammes; if (currentScreen === 'today') paint(); }
+  const n = Math.max(1, Number(unites) || 1);
+  const grammes = n * paquet;
+  const id = opId();
+  // Aucun +stock local avant la réponse : tant que le serveur n'a pas confirmé,
+  // le stock affiché reste le sien (règle du 2026-08-13).
   try {
-    await logCourses([{ produit_id: food.id, unites: Math.max(1, Number(unites) || 1) }]);
+    await logCourses([{ produit_id: food.id, unites: n }], id);
     toast(`${food.nom} — +${num(Math.round(grammes))} g`, 'ok');
     M = null; CoursesData = null; refreshCurrent();
   } catch (err) {
     if (isOffline(err)) {
-      enqueue({ action: 'log', type: 'courses', items: [{ produit_id: food.id, unites: Math.max(1, Number(unites) || 1) }], source: 'scan' });
+      enqueue({ action: 'log', type: 'courses', items: [{ produit_id: food.id, unites: n }], source: 'scan', op_id: id });
       toast('Hors-ligne — ajout mis en file', 'err');
+      if (currentScreen === 'today') paint();
     } else {
       toast(describeError(err), 'err');
       throw err;                 // la feuille de scan réactive son bouton
@@ -584,16 +630,16 @@ async function restockAction(food, unites) {
 
 /** « Pot fini » depuis le scan : force le stock à 0 + recalibration backend. */
 async function potFiniAction(food) {
-  const f = M && M.foods && M.foods.find((x) => x.id === food.id);
-  if (f) { f.stock = 0; if (currentScreen === 'today') paint(); }
+  const id = opId();
   try {
-    await logPotFini(food.id);
+    await logPotFini(food.id, id);
     toast(`${food.nom} — pot fini`, 'ok');
     M = null; refreshCurrent();
   } catch (err) {
     if (isOffline(err)) {
-      enqueue({ action: 'log', type: 'pot_fini', ref: food.id, source: 'scan' });
+      enqueue({ action: 'log', type: 'pot_fini', ref: food.id, source: 'scan', op_id: id });
       toast('Hors-ligne — « pot fini » mis en file', 'err');
+      if (currentScreen === 'today') paint();
     } else {
       toast(describeError(err), 'err');
       throw err;                 // la feuille de scan réactive son bouton
@@ -612,24 +658,18 @@ async function addProduitAction(fiche) {
 async function reconcile() {
   syncing(true);
   try {
-    const [state, catalog] = await Promise.all([getState(), getCatalog()]);
-    M = buildModel(state, catalog);
-    store.cacheState(state);
-    store.cacheCatalog(catalog);
-    paint();
-  } catch { /* garde l'optimiste si le recalage échoue */ }
+    const { state, catalog } = await getBoot();
+    adopter(state, catalog);
+  } catch { /* le dernier état connu reste affiché si le recalage échoue */ }
   finally { syncing(false); }
 }
 
-function cloneModel(m) {
-  return {
-    state: JSON.parse(JSON.stringify(m.state)),
-    foods: m.foods.map((f) => ({ ...f })),
-    exterieurs: m.exterieurs,
-  };
-}
-
-/** Applique des macros aux jauges (optimiste). */
+/**
+ * Applique des macros aux jauges. **Mode démo uniquement** depuis le
+ * 2026-08-13 : hors démo, les jauges affichées viennent toujours du serveur.
+ * Un bump local survivait à l'échec de l'envoi et faisait diverger l'écran de
+ * la vérité — le point de départ des synchros fantômes.
+ */
 function applyMacros(state, macros = {}, qty = 1, sign = +1) {
   const j = state.jauges;
   const bump = (g, add) => {
@@ -829,7 +869,15 @@ $('#queue-badge').addEventListener('click', () => syncQueue({ silent: false }));
 /** Rejoue la file offline ; si des actions sont parties, le backend a changé → recharge. */
 async function syncQueue(opts) {
   const res = await flushQueue(opts);
-  if (res.sent) { M = null; CoursesData = null; refreshCurrent(); }
+  if (!res.sent) return res;
+  CoursesData = null;
+  // Un `commit` rejoué rapporte déjà l'état frais : inutile de le redemander.
+  if (res.state) {
+    adopter(res.state);
+    if (currentScreen !== 'today') refreshCurrent();
+  } else {
+    M = null; refreshCurrent();
+  }
   return res;
 }
 

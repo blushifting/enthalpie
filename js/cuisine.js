@@ -1,7 +1,7 @@
 // Écran « Cuisine » : recette de la semaine (badge nouveau / batch classique),
 // bibliothèque des recettes batch (« je l'ai cuisinée » = POST batch_cuisine) et
 // compteurs gamifiés (SPEC §4.3, §7). Lecture + une action par recette.
-import { h, clear, num, macroChips, frDate } from './util.js';
+import { h, clear, num, macroChips, frDate, bandeauCache } from './util.js';
 
 // Les macros du catalogue sont POUR 100 g ; sur une carte recette, ce qui parle
 // c'est ce que la fournée entière apporte.
@@ -70,7 +70,7 @@ export function renderCuisine(root, data, handlers) {
   clear(root);
 
   if (d.__offline) {
-    root.append(h('div', { class: 'offline-banner' }, '⚡ Hors-ligne — dernière cuisine connue'));
+    root.append(bandeauCache(d.__offline, 'dernière cuisine connue'));
   }
 
   root.append(h('p', { class: 'day-caption' }, 'Cuisine'));

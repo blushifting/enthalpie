@@ -208,13 +208,32 @@ export function macroChips(m = {}) {
   return chips;
 }
 
-/** Toast éphémère (info/ok/err). */
+/**
+ * Bandeau « ce que tu vois vient du cache ». La CAUSE compte (2026-08-13) :
+ * un appel sur trois vers Apps Script dépasse 20 s alors que la connexion est
+ * parfaite, et écrire « Hors-ligne » dans ce cas envoie chercher une panne de
+ * réseau qui n'existe pas.
+ * @param cause 'reseau' (vraiment déconnecté) | autre (serveur qui n'a pas répondu)
+ */
+export function bandeauCache(cause, quoi) {
+  const reseau = cause === 'reseau';
+  return h('div', { class: 'offline-banner' },
+    reseau ? `⚡ Hors-ligne — ${quoi}` : `⏳ Le serveur n’a pas répondu — ${quoi}`);
+}
+
+/** Toast éphémère (info/ok/err). Il monte à l'apparition et s'efface en
+ *  redescendant : disparaître d'un coup faisait douter de l'avoir vu. */
 let toastTimer;
+const TOAST_SORTIE_MS = 200;             // à garder synchro avec la transition CSS
+function retirerToast(el) {
+  el.classList.add('is-sortie');
+  setTimeout(() => el.remove(), TOAST_SORTIE_MS);
+}
 export function toast(message, kind = '') {
   document.querySelectorAll('.toast').forEach((t) => t.remove());
   const el = h('div', { class: `toast ${kind ? 'toast--' + kind : ''}` },
     kind === 'ok' ? '✓ ' : kind === 'err' ? '⚠ ' : '', message);
   document.body.append(el);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.remove(), kind === 'err' ? 4200 : 2400);
+  toastTimer = setTimeout(() => retirerToast(el), kind === 'err' ? 4200 : 2400);
 }

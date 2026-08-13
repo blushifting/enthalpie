@@ -161,8 +161,11 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .gauge__ring { width: 100%; max-width: 84px; aspect-ratio: 1; position: relative; }
 .gauge__ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .gauge__track { fill: none; stroke: var(--surface-2); stroke-width: 9; }
+/* La section de jauges survit aux repeintures (cf. today.js) : c'est ce qui
+   donne à cette transition quelque chose à jouer. Même courbe et même durée que
+   le compteur du centre, pour qu'anneau et nombre arrivent ensemble. */
 .gauge__fill  { fill: none; stroke-width: 9; stroke-linecap: round;
-  transition: stroke-dashoffset .5s ease; }
+  transition: stroke-dashoffset .56s cubic-bezier(.22,1,.36,1); }
 .gauge__center {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; line-height: 1.02;
@@ -193,6 +196,21 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .gauge.is-attente .gauge__value { color: var(--txt-dim); letter-spacing: 2px; }
 .gauge.is-attente .gauge__track { animation: gauge-attente 1.4s ease-in-out infinite; }
 @keyframes gauge-attente { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+
+/* Projection : l'anneau montre où la validation va l'emmener, avant que le
+   serveur ait répondu. Atténué exprès — c'est une prévision, pas un fait, et
+   elle se cale sur la vraie valeur dès que la réponse arrive. */
+.gauge.is-projection .gauge__fill { opacity: .62; }
+.gauge.is-projection .gauge__value { opacity: .78; }
+.gauge.is-projection .gauge__badge { animation: gauge-attente 1.1s ease-in-out infinite; }
+
+/* Franchissement de la cible : une pulsation, une fois. */
+.gauge.is-atteinte .gauge__ring { animation: gauge-atteinte .8s ease-out; }
+@keyframes gauge-atteinte {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.07); }
+  100% { transform: scale(1); }
+}
 
 /* ---------- Sections créneaux ---------- */
 .section-hint { color: var(--txt-dim); font-size: 12.5px; margin: 18px 2px 10px; }
@@ -532,7 +550,11 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   25%, 60% { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
 }
 
-/* Barre de validation (apparaît dès qu'un curseur bouge). */
+/* Barre de validation (apparaît dès qu'un curseur bouge).
+   Pilotée par `.is-on`, pas par `hidden` : `[hidden]{display:none}` retire
+   l'élément du flux d'un coup et interdit toute animation. `visibility` est
+   retardée à la fin de la sortie pour que la barre ne reste pas cliquable en
+   plein glissement. */
 .valbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -542,6 +564,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   backdrop-filter: blur(12px);
   border-top: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
   box-shadow: 0 -8px 24px rgba(0,0,0,.4);
+  transform: translateY(130%);
+  visibility: hidden;
+  transition: transform .28s cubic-bezier(.2,.9,.25,1), visibility 0s .28s;
+}
+.valbar.is-on {
+  transform: none;
+  visibility: visible;
+  transition: transform .28s cubic-bezier(.2,.9,.25,1), visibility 0s;
 }
 .valbar__info { display: flex; align-items: center; gap: 9px; font-size: 13.5px; font-weight: 600; }
 .valbar__dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
@@ -1058,6 +1088,123 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
    retour à la ligne, un décalage en pixels serait fragile. Il revient à la fermeture. */
 body.has-update .fab { display: none; }
 
+/* =====================================================================
+   MOUVEMENT (2026-08-13)
+   L'app était volontairement figée (« zéro animation superflue », en-tête
+   de cette feuille). Ce qui suit ne s'y oppose pas : rien ici n'est décoratif,
+   chaque mouvement dit quelque chose que l'écran fixe ne disait pas — d'où ça
+   vient, où c'est parti, ce qui vient d'arriver, ce qu'on attend.
+   Tout passe sous le `prefers-reduced-motion` en fin de fichier.
+   ===================================================================== */
+
+/* ---------- Transitions d'onglets (View Transitions) ---------- */
+/* Le navigateur photographie l'écran avant et après le changement d'onglet et
+   fait le fondu-glissé lui-même. `data-sens` vient de l'ordre de la barre du
+   bas (app.js) : le contenu part du côté d'où l'on vient. */
+.screen { view-transition-name: ecran; }
+
+::view-transition-old(ecran),
+::view-transition-new(ecran) {
+  animation-duration: .24s;
+  animation-timing-function: cubic-bezier(.3,.9,.3,1);
+  /* Sans ça, le navigateur mélange les deux photos par un fondu croisé qui
+     double les textes pendant le glissement. */
+  mix-blend-mode: normal;
+}
+:root[data-sens="avant"]::view-transition-old(ecran)  { animation-name: ecran-sortie-gauche; }
+:root[data-sens="avant"]::view-transition-new(ecran)  { animation-name: ecran-entree-droite; }
+:root[data-sens="arriere"]::view-transition-old(ecran) { animation-name: ecran-sortie-droite; }
+:root[data-sens="arriere"]::view-transition-new(ecran) { animation-name: ecran-entree-gauche; }
+
+@keyframes ecran-sortie-gauche { to   { opacity: 0; transform: translateX(-22px); } }
+@keyframes ecran-entree-droite { from { opacity: 0; transform: translateX(22px); } }
+@keyframes ecran-sortie-droite { to   { opacity: 0; transform: translateX(22px); } }
+@keyframes ecran-entree-gauche { from { opacity: 0; transform: translateX(-22px); } }
+
+/* ---------- Feuilles modales ---------- */
+/* Réglages, scan, repas extérieur, rangement, « quoi manger ? » : elles
+   apparaissaient d'un coup, sans qu'on voie d'où. Elles montent maintenant du
+   bas, là où le pouce les a demandées. */
+.sheet-backdrop { animation: fondu-in .18s ease-out both; }
+.sheet { animation: feuille-in .28s cubic-bezier(.2,.9,.25,1) both; }
+@keyframes fondu-in   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes feuille-in { from { transform: translateY(18%); } to { transform: none; } }
+
+/* ---------- Toast ---------- */
+.toast {
+  animation: toast-in .2s cubic-bezier(.2,.9,.25,1) both;
+  transition: opacity .2s ease, transform .2s ease;
+}
+.toast.is-sortie { opacity: 0; transform: translateX(-50%) translateY(8px); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  to   { opacity: 1; transform: translateX(-50%); }
+}
+
+/* ---------- Inventaire : cascade d'entrée (première peinture) ---------- */
+.inv-row.is-entree {
+  animation: ligne-in .3s ease-out both;
+  animation-delay: calc(var(--i, 0) * 26ms);
+}
+@keyframes ligne-in { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+
+/* ---------- Résumé du jour ---------- */
+/* Entrée qui vient d'apparaître : elle se signale une fois. */
+.jrn__row.is-neuve { animation: jrn-neuve 1.5s ease-out; }
+@keyframes jrn-neuve {
+  0%      { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  30%     { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  100%    { background: transparent; }
+}
+/* Entrée qu'on vient de retirer : elle se replie pendant l'aller-retour, au
+   lieu de disparaître d'un coup à la repeinture. */
+.jrn__row {
+  overflow: hidden;
+  transition: max-height .26s ease, opacity .2s ease, padding .26s ease, margin .26s ease;
+  max-height: 120px;
+}
+/* `min-height` l'emporte sur `max-height` en CSS : sans le remettre à zéro, la
+   ligne resterait à ses 44 px et ne se replierait pas d'un pixel. */
+.jrn__row.is-partante {
+  max-height: 0; min-height: 0; opacity: 0;
+  padding-top: 0; padding-bottom: 0; margin: 0; border-top-width: 0;
+}
+
+/* ---------- Squelettes de premier chargement ---------- */
+/* Ils dessinent la FORME de l'écran qui arrive : l'œil se pose au bon endroit
+   et la page ne saute pas quand le contenu remplace le vide. Un spinner ne dit
+   rien de ce qu'on attend. */
+.skel { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+.skel__bloc {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(100deg,
+    var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%);
+  background-size: 300% 100%;
+  animation: skel-passe 1.4s ease-in-out infinite;
+}
+@keyframes skel-passe { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+
+/* ---------- Tirer pour rafraîchir ---------- */
+/* Contrepartie de la fenêtre de fraîcheur : l'app ne redemande plus le serveur
+   à chaque retour d'onglet, ce geste le fait à la demande. */
+.ptr {
+  position: fixed; top: calc(var(--safe-top) + 4px); left: 50%; z-index: 45;
+  transform: translateX(-50%);
+  width: 34px; height: 34px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface); border: 1px solid var(--line);
+  color: var(--txt-dim); font-size: 16px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  pointer-events: none;
+}
+.ptr.is-arme  { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.ptr.is-actif { transition: transform .18s ease; }
+.ptr.is-actif .ptr__ico { animation: spin .7s linear infinite; }
+.ptr__ico { display: block; line-height: 1; }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+  /* Une durée quasi nulle sur `visibility` la rendrait immédiate, ce qui est
+     justement le comportement voulu ici — mais la barre doit rester visible. */
+  .valbar.is-on { visibility: visible; }
 }

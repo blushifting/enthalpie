@@ -2,7 +2,7 @@
 // choix — les 7 derniers jours (un point par jour) ou 4 semaines glissantes
 // (moyenne journalière) — + streak protéines (SPEC §4.4, §7).
 // Graphiques SVG maison, zéro dépendance.
-import { h, clear, num, numEntier, frDate } from './util.js';
+import { h, clear, num, numEntier, frDate, bandeauCache } from './util.js';
 import { REPLI_CIBLES, REPLI_TOLERANCES } from './config.js';
 import { store } from './store.js';
 
@@ -178,7 +178,7 @@ export function renderBilan(root, data) {
   clear(root);
 
   if (d.__offline) {
-    root.append(h('div', { class: 'offline-banner' }, '⚡ Hors-ligne — dernier bilan connu'));
+    root.append(bandeauCache(d.__offline, 'dernier bilan connu'));
   }
 
   const semaines = d.semaines || [];

@@ -94,6 +94,7 @@ var CRENEAUX = ['petit_dej', 'dejeuner', 'diner', 'collation'];
  * crée ce qui manque à la première écriture (cf. `ops`, 2026-08-13).
  */
 function setup() {
+  oublierTout_();                        // les en-têtes vont bouger sous le mémo
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   Object.keys(SCHEMA).forEach(function (name) {
     var sh = ss.getSheetByName(name) || ss.insertSheet(name);
@@ -154,13 +155,31 @@ function sheet_(name) {
   return sh;
 }
 
-/** Lit un onglet en tableau d'objets {header: valeur}. */
+/* ---- Mémo par exécution (2026-08-13) ------------------------------------
+ * Chaque `getDataRange().getValues()` est un aller-retour vers le Sheet, et un
+ * même onglet était relu quatre à cinq fois dans une seule requête : `params_()`
+ * dans `checkToken_` puis dans `getState_`, `plats` deux fois dans `getState_`,
+ * `produits` une fois par plat dans `macrosOf_`… Un `commit` totalisait une
+ * quinzaine de lectures pour six onglets distincts. C'était une part majeure du
+ * temps de réponse ressenti (mesuré le 2026-08-13 : le plancher Apps Script est
+ * de ~1,8 s, chaque lecture ajoutait par-dessus).
+ *
+ * Le mémo est valable pour UNE exécution : il est vidé en tête de `handle_`, et
+ * toute écriture invalide l'onglet touché (`oublierOnglet_`). Il ne peut donc pas
+ * servir de données périmées — le contexte V8 d'Apps Script ne survit pas à la
+ * requête de toute façon.
+ */
+var _memo = {};
+function oublierTout_() { _memo = {}; }
+
+/** Lit un onglet en tableau d'objets {header: valeur}. Mémoïsé (cf. `oublier_`). */
 function readTable_(name) {
+  if (_memo[name]) return _memo[name];
   var sh = sheet_(name);
   var values = sh.getDataRange().getValues();
-  if (values.length < 2) return [];
+  if (values.length < 2) { _memo[name] = []; return _memo[name]; }
   var headers = values[0];
-  return values.slice(1)
+  _memo[name] = values.slice(1)
     .filter(function (row) { return row.join('') !== ''; })
     .map(function (row) {
       var o = {};
@@ -168,6 +187,71 @@ function readTable_(name) {
       o._row = null; // rempli au besoin par les fonctions qui écrivent
       return o;
     });
+  return _memo[name];
+}
+
+/**
+ * Lit la FIN d'un onglet append-only, en remontant par blocs jusqu'à dépasser
+ * `depuisMs`. Même sortie que `readTable_`, sans en payer le prix.
+ *
+ * Pourquoi (2026-08-13) : `getState_` lisait deux fois l'intégralité de l'onglet
+ * `log` — tout l'historique — alors qu'il ne lui faut que la journée en cours.
+ * Le coût grandissait donc à chaque repas saisi, définitivement. `log` et `ops`
+ * ne s'écrivent que par ajout en fin (la seule suppression, `annulerExterieur_`,
+ * retire une ligne sans déranger l'ordre) : lire la queue suffit et borne le
+ * coût pour de bon.
+ *
+ * `depuisMs = null` relit tout (migrations, statistiques longues).
+ */
+var BLOC_QUEUE = 500;
+function readTail_(name, colTemps, depuisMs) {
+  if (depuisMs == null) return readTable_(name);
+  var cle = name + '@' + depuisMs;
+  if (_memo[cle]) return _memo[cle];
+
+  var sh = sheet_(name);
+  var last = sh.getLastRow();
+  var largeur = Math.max(1, sh.getLastColumn());
+  if (last < 2) { _memo[cle] = []; return _memo[cle]; }
+
+  var headers = sh.getRange(1, 1, 1, largeur).getValues()[0];
+  var iTemps = headers.indexOf(colTemps);
+  var lignes = [];
+  var fin = last;
+  while (fin >= 2) {
+    var debut = Math.max(2, fin - BLOC_QUEUE + 1);
+    var bloc = sh.getRange(debut, 1, fin - debut + 1, largeur).getValues();
+    lignes = bloc.concat(lignes);
+    // La plus ancienne du bloc est déjà avant la coupure → inutile de remonter.
+    // Un horodatage illisible donne NaN, dont toute comparaison est fausse : on
+    // s'arrête, ce qui est le bon réflexe (on ne sait plus dater, on ne remonte
+    // pas à l'aveugle sur tout l'historique).
+    if (iTemps === -1 || !(tsOf_(bloc[0][iTemps]) >= depuisMs)) break;
+    fin = debut - 1;
+  }
+
+  _memo[cle] = lignes
+    .filter(function (row) { return row.join('') !== ''; })
+    .map(function (row) {
+      var o = {};
+      headers.forEach(function (h, i) { o[h] = row[i]; });
+      o._row = null;
+      return o;
+    });
+  return _memo[cle];
+}
+
+/** Lignes de `log` depuis `depuisMs` (null = tout l'historique). */
+function readLog_(depuisMs) { return readTail_('log', 'timestamp', depuisMs); }
+
+/** Minuit local du jour, en millisecondes — coupure des lectures « du jour ». */
+function debutDuJour_(tz) {
+  var iso = Utilities.formatDate(new Date(), tz || 'Europe/Paris', 'yyyy-MM-dd');
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return null;
+  // Marge d'une heure : le fuseau du script et celui du paramètre `tz` peuvent
+  // différer, et rater une ligne du matin vaudrait un apport perdu.
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() - 3600000;
 }
 
 /** Ajoute une ligne depuis un objet, dans l'ordre des en-têtes. */
@@ -177,6 +261,19 @@ function appendRow_(name, obj) {
   sh.appendRow(headers.map(function (h) {
     return obj[h] === undefined ? '' : obj[h];
   }));
+  oublierOnglet_(name);
+}
+
+/**
+ * Invalide le mémo d'un onglet qu'on vient d'écrire — y compris ses lectures de
+ * queue, dont la clé porte une coupure (`log@1755…`). Sans ça, le `getState_`
+ * qui suit une écriture repartirait des lignes lues AVANT elle, et la réponse
+ * renverrait un état qui ignore ce qu'on vient d'enregistrer.
+ */
+function oublierOnglet_(name) {
+  Object.keys(_memo).forEach(function (k) {
+    if (k === name || k.indexOf(name + '@') === 0) delete _memo[k];
+  });
 }
 
 /**
@@ -192,6 +289,7 @@ function appendRows_(name, objs) {
     return headers.map(function (h) { return obj[h] === undefined ? '' : obj[h]; });
   });
   sh.getRange(sh.getLastRow() + 1, 1, lignes.length, headers.length).setValues(lignes);
+  oublierOnglet_(name);
 }
 
 /**
@@ -249,6 +347,7 @@ function assurerColonnesProduits_() {
     var entetes = sh.getRange(1, 1, 1, largeur).getValues()[0];
     if (entetes.join('') !== SCHEMA.produits.join('')) {
       sh.getRange(1, 1, 1, largeur).setValues([SCHEMA.produits]).setFontWeight('bold');
+      oublierOnglet_('produits');       // les en-têtes ont changé : le mémo est faux
     }
   } catch (e) {
     Logger.log('assurerColonnesProduits_ : ' + e);
@@ -294,6 +393,7 @@ function assurerCibleFibres_() {
     var cT = SCHEMA.objectifs.indexOf('tol_fibres') + 1;
     if (!sh.getRange(2, cF).getValue()) sh.getRange(2, cF).setValue(FIBRES_DEFAUT.cible);
     if (!sh.getRange(2, cT).getValue()) sh.getRange(2, cT).setValue(FIBRES_DEFAUT.tolerance);
+    oublierOnglet_('objectifs');
   } catch (e) {
     // Une lecture ne doit jamais échouer à cause d'une migration : au pire la
     // jauge reste « informative », ce qui est le comportement d'avant.
@@ -330,6 +430,7 @@ var ACTIONS_ECRITURE = {
 
 function handle_(e, p) {
   var action = (p && p.action) || 'state';
+  oublierTout_();                       // le mémo ne vaut que pour CETTE requête
   try {
     checkToken_(p.token);
     var result = ACTIONS_ECRITURE[action] ? ecrire_(action, p) : lire_(action, p);
@@ -351,7 +452,7 @@ function lire_(action, p) {
   switch (action) {
     // Démarrage en UN aller-retour. Deux GET séparés, c'était deux exécutions
     // Apps Script (~1,5 s pièce) pour des données lues dans les mêmes onglets.
-    case 'boot':           return { state: getState_(), catalog: getCatalog_() };
+    case 'boot':           return boot_();
     case 'state':          return getState_();
     case 'catalog':        return getCatalog_();
     case 'courses':        return getCourses_();
@@ -360,6 +461,59 @@ function lire_(action, p) {
     case 'search_catalog': return searchCatalog_(p.q);
     default: throw new Error('Action inconnue : ' + action);
   }
+}
+
+/* ---- Cache du payload de démarrage (2026-08-13) -------------------------
+ *
+ * `boot` est de loin l'appel le plus fréquent, et le seul dont le contenu ne
+ * change QUE sur écriture. Le servir depuis `CacheService` évite de relire six
+ * onglets pour recomposer un objet identique — c'est ce qui ramène l'appel au
+ * plancher d'Apps Script (~1,8 s mesurés le 2026-08-13, redirection comprise).
+ *
+ * La clé porte un NUMÉRO DE VERSION, bumpé par chaque écriture, et non un simple
+ * effacement. La différence est ce qui rend le cache sûr : une lecture partie
+ * avant une écriture, et qui reviendrait la déposer en cache après elle, écrit
+ * sous l'ANCIENNE clé — elle ne peut donc pas ressusciter un état périmé. Un
+ * effacement, lui, laissait cette course ouverte pendant toute la durée du TTL.
+ *
+ * La date est dans la clé aussi : à minuit, les jauges repartent à zéro sans
+ * qu'aucune écriture n'ait eu lieu.
+ */
+var CACHE_BOOT_S = 240;
+var CACHE_BOOT_MAX = 95000;             // CacheService plafonne une valeur à 100 ko
+
+function versionDonnees_() {
+  try { return PropertiesService.getScriptProperties().getProperty('data_version') || '0'; }
+  catch (e) { return null; }            // Properties indisponible → on saute le cache
+}
+function bumperVersionDonnees_() {
+  try { PropertiesService.getScriptProperties().setProperty('data_version', String(Date.now())); }
+  catch (e) { /* au pire le cache expire tout seul au bout de CACHE_BOOT_S */ }
+}
+
+function boot_() {
+  var tz = params_().tz || 'Europe/Paris';
+  var v = versionDonnees_();
+  var cle = v == null ? null
+    : 'boot:' + v + ':' + Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+
+  if (cle) {
+    try {
+      var brut = CacheService.getScriptCache().get(cle);
+      if (brut) return JSON.parse(brut);
+    } catch (e) { /* cache illisible : on recalcule, c'est tout */ }
+  }
+
+  var data = { state: getState_(), catalog: getCatalog_() };
+  if (cle) {
+    try {
+      var s = JSON.stringify(data);
+      // Un catalogue volumineux dépasserait le plafond : `put` lèverait, et on
+      // paierait l'exception à chaque appel pour rien.
+      if (s.length <= CACHE_BOOT_MAX) CacheService.getScriptCache().put(cle, s, CACHE_BOOT_S);
+    } catch (e) { /* pas de cache cette fois-ci */ }
+  }
+  return data;
 }
 
 /**
@@ -379,8 +533,12 @@ function ecrire_(action, p) {
   var opId = trim_((p && p.op_id) || '');
   var lock = LockService.getScriptLock();
   try {
-    // 25 s : au-delà, l'exécution frôle de toute façon le quota Apps Script.
-    if (!lock.tryLock(25000)) {
+    // 12 s (et non 25) depuis le 2026-08-13 : la PWA double désormais une
+    // requête restée sans réponse, et le doublon d'une écriture arrive avec le
+    // MÊME `op_id`. S'il campait 25 s sur le verrou, il tiendrait la file
+    // ouverte bien après que l'original a fini. Rendre la main vite, en
+    // `transient`, laisse la PWA réessayer sur un serveur libre.
+    if (!lock.tryLock(12000)) {
       var occupe = new Error('Serveur occupé (écriture concurrente). Réessaie.');
       occupe.transient = true;
       throw occupe;
@@ -408,7 +566,22 @@ function ecrire_(action, p) {
       case 'annuler_exterieur': res = annulerExterieur_(p); break;
       default: throw new Error('Action inconnue : ' + action);
     }
+    // L'état frais voyage avec TOUTE réponse d'écriture (2026-08-13). `commit`
+    // le faisait déjà ; les autres non, et la PWA enchaînait donc un `boot`
+    // complet derrière chaque geste — scanner un produit acheté, dire « pot
+    // fini », ranger, cuisiner : deux exécutions Apps Script au lieu d'une, soit
+    // ~4 s d'attente inutile à chaque fois. Le calcul est quasi gratuit ici :
+    // les onglets sont déjà en mémo, l'écriture vient de les invalider.
+    if (res && typeof res === 'object' && !Array.isArray(res)) {
+      if (!res.state) res.state = getState_();
+      // Le catalogue n'est renvoyé que quand il a pu changer : c'est le plus
+      // gros des deux payloads, inutile de l'imposer à un simple log de repas.
+      if ((action === 'add_produit' || action === 'set_categorie') && !res.catalog) {
+        res.catalog = getCatalog_();
+      }
+    }
     if (opId) enregistrerOp_(opId, action, res);
+    bumperVersionDonnees_();            // le `boot` en cache ne vaut plus rien
     return res;
   } finally {
     lock.releaseLock();
@@ -417,11 +590,22 @@ function ecrire_(action, p) {
 
 /* ---- Idempotence : journal des op_id déjà appliqués ---- */
 
-/** Ligne de l'onglet `ops` pour cet op_id, ou null. */
+/**
+ * Ligne de l'onglet `ops` pour cet op_id, ou null.
+ *
+ * Ne lit que la QUEUE de l'onglet (2026-08-13) : le scan intégral se payait à
+ * chaque écriture et grandissait sans fin. Une file offline ne se rejoue jamais
+ * au-delà de quelques jours, et `purgerOps_` borne déjà l'onglet à 30 jours :
+ * les dernières lignes suffisent largement à reconnaître un doublon.
+ */
+var OPS_QUEUE = 800;
 function opVue_(opId) {
-  assurerOnglet_('ops');
-  var vals = sheet_('ops').getDataRange().getValues();
-  for (var r = vals.length - 1; r >= 1; r--) {          // du plus récent au plus ancien
+  var sh = assurerOnglet_('ops');
+  var last = sh.getLastRow();
+  if (last < 2) return null;
+  var debut = Math.max(2, last - OPS_QUEUE + 1);
+  var vals = sh.getRange(debut, 1, last - debut + 1, 4).getValues();
+  for (var r = vals.length - 1; r >= 0; r--) {          // du plus récent au plus ancien
     if (String(vals[r][0]) === String(opId)) {
       return { op_id: vals[r][0], timestamp: vals[r][1], action: vals[r][2], resume: vals[r][3] };
     }
@@ -433,7 +617,16 @@ function opVue_(opId) {
 function enregistrerOp_(opId, action, res) {
   assurerOnglet_('ops');
   var resume = '';
-  try { resume = JSON.stringify(res).slice(0, 400); } catch (e) { resume = ''; }
+  try {
+    // `state` et `catalog` voyagent avec toutes les réponses d'écriture depuis
+    // le 2026-08-13 : les recopier ici remplirait les 400 caractères d'un état
+    // tronqué au milieu, illisible au rejeu. On ne garde que l'accusé.
+    var court = {};
+    Object.keys(res || {}).forEach(function (k) {
+      if (k !== 'state' && k !== 'catalog') court[k] = res[k];
+    });
+    resume = JSON.stringify(court).slice(0, 400);
+  } catch (e) { resume = ''; }
   appendRow_('ops', { op_id: opId, timestamp: new Date(), action: action, resume: resume });
   purgerOps_();
 }
@@ -444,12 +637,15 @@ var OPS_RETENTION_JOURS = 30;
 function purgerOps_() {
   try {
     var sh = sheet_('ops');
-    if (sh.getLastRow() < 400) return;                  // rien à gagner avant
+    var last = sh.getLastRow();
+    if (last < 400) return;                             // rien à gagner avant
     var limite = Date.now() - OPS_RETENTION_JOURS * 86400000;
-    var vals = sh.getDataRange().getValues();
-    var garde = 1;                                      // 1re ligne de données à garder
-    while (garde < vals.length && tsOf_(vals[garde][1]) < limite) garde++;
-    if (garde > 1) sh.deleteRows(2, garde - 1);
+    // Seule la colonne des horodatages sert ici : lire les quatre colonnes de
+    // tout l'onglet à chaque écriture était du poids mort sur le chemin critique.
+    var ts = sh.getRange(2, 2, last - 1, 1).getValues();
+    var garde = 0;                                      // nb de lignes à supprimer
+    while (garde < ts.length && tsOf_(ts[garde][0]) < limite) garde++;
+    if (garde > 0) { sh.deleteRows(2, garde); oublierOnglet_('ops'); }
   } catch (e) { Logger.log('purgerOps_ : ' + e); }
 }
 
@@ -461,7 +657,12 @@ function purgerOps_() {
 function rejeu_(action, vue) {
   var out = { deja_traite: true, op_id: vue.op_id, applique_le: vue.timestamp };
   try { if (vue.resume) out.resume = JSON.parse(vue.resume); } catch (e) { /* résumé tronqué */ }
-  if (action === 'commit' || action === 'annuler_exterieur') out.state = getState_();
+  // Toujours l'état frais, pour TOUTE action rejouée : la PWA se recale dessus
+  // sans redemander un `boot` derrière. C'est d'autant plus vrai depuis qu'elle
+  // double une requête lente — le doublon est un rejeu, et il doit rapporter
+  // exactement ce que l'original a rapporté.
+  out.state = getState_();
+  if (action === 'add_produit' || action === 'set_categorie') out.catalog = getCatalog_();
   return out;
 }
 
@@ -490,9 +691,12 @@ function getState_() {
   var produitsById = indexBy_(readTable_('produits'), 'id');
   var stock = stockMap_();
 
-  // Consommation du jour à partir du log (plats ET produits bruts loggués au curseur)
+  // Consommation du jour à partir du log (plats ET produits bruts loggués au curseur).
+  // Seule la journée est lue : relire tout l'historique deux fois par `getState_`
+  // coûtait de plus en plus cher à chaque repas saisi (2026-08-13).
+  var depuis = debutDuJour_(tz);
   var conso = { kcal: 0, prot_g: 0, fibres_g: 0 };
-  readTable_('log').forEach(function (l) {
+  readLog_(depuis).forEach(function (l) {
     if (formatTs_(l.timestamp, tz) !== today) return;
     // Les macros de plats/produits sont POUR 100 g et la quantité loguée est en
     // grammes → facteur q/100. Le repas extérieur, lui, porte des macros
@@ -516,7 +720,8 @@ function getState_() {
     fibres_g: gauge_(conso.fibres_g, obj.fibres_g_jour)
   };
 
-  // Pools par créneau : plats actifs, marqués faisables ou non selon le stock
+  // Pools par créneau : plats actifs, marqués faisables ou non selon le stock.
+  // `readTable_` est mémoïsé : c'est la même lecture que `platsById` plus haut.
   var pools = {};
   CRENEAUX.forEach(function (c) { pools[c] = []; });
   readTable_('plats').forEach(function (pl) {
@@ -537,7 +742,7 @@ function getState_() {
     jauges: jauges,
     pools: pools,
     stock: stock,
-    journal: journalDuJour_(tz, today, platsById, produitsById)
+    journal: journalDuJour_(tz, today, platsById, produitsById, depuis)
   };
 }
 
@@ -556,13 +761,15 @@ function getState_() {
  *     retirer un seul (les lignes de log n'ont pas d'id, et les nouvelles
  *     s'ajoutent toujours après, donc le rang d'une entrée affichée ne bouge pas).
  */
-function journalDuJour_(tz, today, platsById, produitsById) {
+function journalDuJour_(tz, today, platsById, produitsById, depuis) {
   var parRef = {};
   var ordre = [];
   var sorties = [];
   var rangExt = 0;
 
-  readTable_('log').forEach(function (l) {
+  // Même coupure que `getState_` : la lecture est mémoïsée, les deux parcours
+  // ne coûtent donc qu'un seul aller-retour vers le Sheet.
+  readLog_(depuis === undefined ? debutDuJour_(tz) : depuis).forEach(function (l) {
     if (formatTs_(l.timestamp, tz) !== today) return;
 
     if (l.type === 'exterieur') {
@@ -773,12 +980,18 @@ function getBilan_() {
   return bilan;
 }
 
+// Le Bilan regarde 4 semaines révolues + les 7 derniers jours : 45 jours de
+// journal couvrent tout, avec de la marge pour les semaines partielles. Au-delà,
+// c'est de l'historique que personne ne consulte, et le relire à chaque ouverture
+// de l'écran alourdissait la réponse sans rien changer à l'affichage.
+var BILAN_JOURS = 45;
+
 /** Apports journaliers reconstruits du journal : plats (médian inclus) + produits bruts. */
 function intakeParJour_(tz) {
   var platsById = indexBy_(readTable_('plats'), 'id');
   var produitsById = indexBy_(readTable_('produits'), 'id');
   var parJour = {};
-  readTable_('log').forEach(function (l) {
+  readLog_(Date.now() - BILAN_JOURS * 86400000).forEach(function (l) {
     // Même mise à l'échelle que getState_ : macros pour 100 g × grammes/100,
     // sauf le repas extérieur dont les macros sont absolues.
     var m = null; var f = 0;
@@ -984,9 +1197,9 @@ function commit_(p) {
   var platsById = indexBy_(readTable_('plats'), 'id');
 
   // Consommation déjà journalisée AUJOURD'HUI, par référence : c'est le plafond
-  // de ce qu'une correction peut annuler.
+  // de ce qu'une correction peut annuler. Lecture bornée à la journée.
   var consoJour = {};
-  readTable_('log').forEach(function (l) {
+  readLog_(debutDuJour_(tz)).forEach(function (l) {
     if (l.type !== 'plat' && l.type !== 'produit') return;
     if (formatTs_(l.timestamp, tz) !== today) return;
     var k = String(l.ref);
@@ -1295,6 +1508,7 @@ function setCategorie_(p) {
     sh.getRange(ligne, col).setValue(normCategorie_(it.categorie));
     n++;
   });
+  oublierOnglet_('produits');
   return { ranges: n };
 }
 
@@ -1368,6 +1582,7 @@ function annulerExterieur_(p) {
       throw new Error('Le repas affiché ne correspond plus à celui enregistré. Recharge l’écran.');
     }
     sh.deleteRow(r + 1);                       // +1 : la ligne d'en-tête
+    oublierOnglet_('log');
     return { annule: 'exterieur', rang: rang, kcal: m.kcal, state: getState_() };
   }
   throw new Error('Repas extérieur introuvable (déjà retiré ?).');
@@ -1406,6 +1621,7 @@ function stockMap_() {
 function setStock_(ref, grammes) {
   var sh = sheet_('stock');
   var values = sh.getDataRange().getValues();
+  oublierOnglet_('stock');
   for (var r = 1; r < values.length; r++) {
     if (String(values[r][0]) === String(ref)) {
       sh.getRange(r + 1, 2).setValue(round2_(grammes));
@@ -1454,6 +1670,7 @@ function appliquerDeltas_(deltas) {
   if (nouvelles.length) {
     sh.getRange(sh.getLastRow() + 1, 1, nouvelles.length, 2).setValues(nouvelles);
   }
+  oublierOnglet_('stock');
 }
 
 /* ===================================================================== */
@@ -1514,6 +1731,10 @@ function macrosOf_(platId, platsById) {
       fibres_g: fibresOu_(pl.fibres_100g)
     };
   }
+  // Mémoïsé : cette ligne relisait TOUT l'onglet `produits` pour chaque plat
+  // dépourvu de colonnes pré-calculées, et `macrosOf_` est appelée dans des
+  // boucles (pools par créneau, journal du jour, bilan). Invisible tant que
+  // l'onglet `plats` est vide — ruineux le jour où il sera peuplé.
   var produitsById = indexBy_(readTable_('produits'), 'id');
   var tot = { kcal: 0, prot_g: 0, fibres_g: 0 };
   var poids = 0;
@@ -1586,7 +1807,7 @@ function consoParProduitParJour_(platsById, produitsById, jours) {
   var cutoff = Date.now() - jours * 86400000;
   var totals = {};
   var add = function (id, n) { totals[id] = (totals[id] || 0) + n; };
-  readTable_('log').forEach(function (l) {
+  readLog_(cutoff).forEach(function (l) {
     if (tsOf_(l.timestamp) < cutoff) return;
     var q = Number(l.quantite) || 1;
     if (l.type === 'produit') {
@@ -1636,6 +1857,7 @@ function creneauCourant_(tz) {
 function touchRecette_(recetteId, now) {
   var sh = sheet_('recettes');
   var values = sh.getDataRange().getValues();
+  oublierOnglet_('recettes');
   var iId = SCHEMA.recettes.indexOf('id');
   var iDate = SCHEMA.recettes.indexOf('derniere_realisation');
   for (var r = 1; r < values.length; r++) {
@@ -1971,6 +2193,7 @@ function supprimerColonne_(onglet, nom) {
   var sh = sheet_(onglet);
   var i = sh.getDataRange().getValues()[0].indexOf(nom);
   if (i !== -1) sh.deleteColumn(i + 1);
+  oublierTout_();                        // la structure a bougé : tout mémo est faux
 }
 
 /** Renomme une colonne et recalcule ses valeurs via `calcul(ancienne, ligne)`. */
@@ -1984,4 +2207,5 @@ function renommerColonne_(onglet, avant, apres, calcul) {
     sh.getRange(r + 1, i + 1).setValue(calcul(v[r][i], lignes[r - 1] || {}));
   }
   sh.getRange(1, i + 1).setValue(apres);
+  oublierTout_();
 }

@@ -93,12 +93,38 @@ export const store = {
 
   // --- File de log offline (rejouée au retour réseau) ---
   getQueue() { return readJSON(KEY.queue, []); },
+  /**
+   * Met une action en attente. L'`id` de l'item EST son `op_id` : si le payload
+   * en porte déjà un (tentative directe partie puis perdue), on le REPREND tel
+   * quel. En générer un nouveau ferait recompter une écriture qui avait abouti —
+   * c'est exactement le bug de double comptage du 2026-08-13.
+   */
   enqueue(payload) {
     const q = this.getQueue();
-    q.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, payload, at: Date.now() });
+    const id = (payload && payload.op_id)
+      || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    q.push({ id, payload: { ...payload, op_id: id }, at: Date.now() });
     write(KEY.queue, JSON.stringify(q));
     return q;
   },
   setQueue(q) { write(KEY.queue, JSON.stringify(q || [])); },
   queueSize() { return this.getQueue().length; },
+
+  /**
+   * Références d'aliments touchées par une action encore en attente.
+   * L'écran Aujourd'hui verrouille ces lignes : tant qu'une modification n'est
+   * pas partie, le stock affiché n'est plus celui du serveur, et rejouer un
+   * curseur par-dessus produisait des doubles comptages (2026-08-13).
+   * @returns {Set<string>}
+   */
+  pendingRefs() {
+    const refs = new Set();
+    for (const it of this.getQueue()) {
+      const p = it.payload || {};
+      if (p.ref) refs.add(String(p.ref));
+      for (const c of p.changes || []) if (c && c.ref) refs.add(String(c.ref));
+      for (const i of p.items || []) if (i && i.produit_id) refs.add(String(i.produit_id));
+    }
+    return refs;
+  },
 };

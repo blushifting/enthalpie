@@ -16,9 +16,42 @@ async function parseResponse(res) {
   try { json = await res.json(); }
   catch { throw new ApiError('Réponse illisible du serveur', 'parse'); }
   if (!json || json.ok !== true) {
-    throw new ApiError((json && json.error) || 'Erreur inconnue', 'backend');
+    // `transient` (2026-08-13) : le backend distingue « réessaie » (verrou
+    // occupé, quota) d'un refus définitif. Sans ça, une écriture récupérable
+    // était classée « rejet backend » et abandonnée par la file.
+    const kind = json && json.transient ? 'http' : 'backend';
+    throw new ApiError((json && json.error) || 'Erreur inconnue', kind);
   }
   return json.data;
+}
+
+/**
+ * Apps Script répond en 1 à 3 s, mais une requête peut aussi ne jamais revenir
+ * (réseau mobile qui bascule, onglet réveillé). Sans borne, l'app restait figée
+ * sur « Enregistrement… » sans fin. Le délai dépassé est TRANSITOIRE : l'écriture
+ * a peut-être eu lieu, c'est l'`op_id` qui empêche le rejeu de compter deux fois.
+ */
+const TIMEOUT_MS = 25000;
+async function fetchBorne(url, options = {}) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } catch (e) {
+    throw new ApiError(
+      e && e.name === 'AbortError' ? 'Le serveur met trop de temps à répondre' : 'Réseau indisponible',
+      'network');
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Identifiant d'opération : rend une écriture rejouable sans risque. Le backend
+ * mémorise les `op_id` déjà appliqués et ne les rejoue jamais (Code.gs §4).
+ */
+export function opId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 // --- Lecture (GET) ---
@@ -30,9 +63,7 @@ export async function apiGet(action, params = {}) {
   url.searchParams.set('token', token);
   url.searchParams.set('action', action);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  let res;
-  try { res = await fetch(url.toString(), { method: 'GET', redirect: 'follow' }); }
-  catch { throw new ApiError('Réseau indisponible', 'network'); }
+  const res = await fetchBorne(url.toString(), { method: 'GET', redirect: 'follow' });
   return parseResponse(res);
 }
 
@@ -41,6 +72,11 @@ export async function apiGet(action, params = {}) {
 // backend parse postData.contents (BUILD-PWA.md §1).
 export async function apiPost(body) {
   if (IS_DEMO) {
+    // Validation d'inventaire : la fixture est statique, on renvoie l'état tel
+    // quel — le bump optimiste de la démo suffit à montrer le geste.
+    if (body && body.action === 'commit') {
+      return { applique: (body.changes || []).map((c) => ({ ref: c.ref })), ignores: [], demo: true };
+    }
     // Écho suffisant pour l'UI ; pour les courses on simule la réponse backend
     // (portions ajoutées) afin que l'annulation fonctionne aussi en démo.
     if (body && body.type === 'courses') {
@@ -59,32 +95,40 @@ export async function apiPost(body) {
   }
   const token = store.getToken();
   if (!token) throw new ApiError('Token manquant', 'noauth');
-  let res;
-  try {
-    res = await fetch(store.getApiBase(), {
-      method: 'POST',
-      redirect: 'follow',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ token, ...body }),
-    });
-  } catch { throw new ApiError('Réseau indisponible', 'network'); }
+  const res = await fetchBorne(store.getApiBase(), {
+    method: 'POST',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ token, ...body }),
+  });
   return parseResponse(res);
 }
 
 // Raccourcis typés.
+/** Démarrage en un seul aller-retour : { state, catalog }. */
+export const getBoot    = () => apiGet('boot');
 export const getState   = () => apiGet('state');
 export const getCatalog = () => apiGet('catalog');
 export const getCourses = () => apiGet('courses');
 export const getCuisine = () => apiGet('cuisine');
 export const getBilan   = () => apiGet('bilan');
+/**
+ * Validation groupée de l'inventaire : TOUS les curseurs en un seul POST, et la
+ * réponse contient déjà l'état frais (plus de GET de recalage derrière).
+ * `changes` : [{ ref, kind:'produit'|'plat', delta }], delta en grammes signés.
+ * `id` : op_id — le rejeu d'un commit déjà appliqué ne compte pas deux fois.
+ */
+export const postCommit = (changes, id) => apiPost({ action: 'commit', op_id: id, changes });
 export const postLog     = (payload) => apiPost({ action: 'log', ...payload });
-export const logProduit  = (ref, quantite) => postLog({ type: 'produit', ref, quantite });
-export const logPlat     = (ref, quantite = 1) => postLog({ type: 'plat', ref, quantite });
-export const adjustStock = (ref, delta) => postLog({ type: 'ajustement', ref, delta });
-export const logCourses  = (items) => postLog({ type: 'courses', items });
-export const logPotFini  = (ref) => postLog({ type: 'pot_fini', ref, source: 'scan' });
-export const logBatch    = (ref) => postLog({ type: 'batch_cuisine', ref });
-export const logExterieur = (macros) => postLog({ type: 'exterieur', ...macros });
+// `id` (op_id) est optionnel mais recommandé sur toute écriture susceptible
+// d'être rejouée : sans lui, une réponse perdue fait recompter l'action.
+export const logProduit  = (ref, quantite, id) => postLog({ type: 'produit', ref, quantite, op_id: id });
+export const logPlat     = (ref, quantite = 1, id) => postLog({ type: 'plat', ref, quantite, op_id: id });
+export const adjustStock = (ref, delta, id) => postLog({ type: 'ajustement', ref, delta, op_id: id });
+export const logCourses  = (items, id) => postLog({ type: 'courses', items, op_id: id });
+export const logPotFini  = (ref, id) => postLog({ type: 'pot_fini', ref, source: 'scan', op_id: id });
+export const logBatch    = (ref, id) => postLog({ type: 'batch_cuisine', ref, op_id: id });
+export const logExterieur = (macros, id) => postLog({ type: 'exterieur', ...macros, op_id: id });
 
 // --- Scan : ajout catalogue + recherche (action dédiée, hors "log") ---
 // Nécessitent le redéploiement du backend (endpoints add_produit / search_catalog).
@@ -108,7 +152,8 @@ async function demoData(action, params = {}) {
     return JSON.parse(JSON.stringify({ produits }));
   }
   const map = { state: _demoCache.state, catalog: _demoCache.catalog, courses: _demoCache.courses,
-    cuisine: _demoCache.cuisine, bilan: _demoCache.bilan };
+    cuisine: _demoCache.cuisine, bilan: _demoCache.bilan,
+    boot: { state: _demoCache.state, catalog: _demoCache.catalog } };
   if (!(action in map)) throw new ApiError('Action démo inconnue : ' + action, 'backend');
   // Copie profonde : l'UI peut muter l'objet (retrait optimiste) sans corrompre la fixture.
   return JSON.parse(JSON.stringify(map[action]));

@@ -7,13 +7,19 @@
  *   - Accès : tout le monde (l'auth réelle se fait par token dans l'URL)
  *
  * Endpoints :
+ *   GET  ?token=…&action=boot           → { state, catalog } en UN aller-retour
  *   GET  ?token=…&action=state          → jauges du jour, pools par créneau, stock
  *   GET  ?token=…&action=catalog        → produits + plats actifs
  *   GET  ?token=…&action=courses        → liste de courses (par magasin/rayon)
  *   GET  ?token=…&action=cuisine        → recette de la semaine + biblio batch + compteurs
  *   GET  ?token=…&action=bilan          → prot/kcal/fibres vs cibles : 7 derniers jours + 4 sem.
+ *   POST {token, action:'commit', op_id, changes:[…]} → tout l'inventaire d'un coup + état frais
  *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement | exterieur
  *   POST {token, action:'set_categorie', items:[{produit_id, categorie}]} → rangement du stock
+ *
+ * TOUTE écriture est sérialisée (verrou) et idempotente si elle porte un `op_id`
+ * (cf. §4). C'est la règle qui empêche un rejeu de compter deux fois — le bug
+ * de synchro du 2026-08-13.
  *
  * Conforme à SPEC.md §3 (modèle de données) et §5-6 (moteur / liste).
  * 100 % déterministe, aucune IA ici (SPEC §1 principe 6).
@@ -61,6 +67,12 @@ var SCHEMA = {
   ],
   parametres: [
     'cle', 'valeur'
+  ],
+  // Journal des opérations d'écriture déjà appliquées (2026-08-13). Sert
+  // uniquement à l'idempotence : une action rejouée après une réponse perdue
+  // retrouve son `op_id` ici et n'est PAS réappliquée.
+  ops: [
+    'op_id', 'timestamp', 'action', 'resume'
   ]
 };
 
@@ -73,9 +85,12 @@ var CRENEAUX = ['petit_dej', 'dejeuner', 'diner', 'collation'];
 
 /**
  * À exécuter UNE FOIS à la main depuis l'éditeur Apps Script après avoir
- * collé ce fichier dans le Sheet. Crée les 7 onglets avec en-têtes et
+ * collé ce fichier dans le Sheet. Crée les onglets avec en-têtes et
  * pré-remplit objectifs (cibles du skill nutrition) + parametres.
  * Idempotent : ne réécrit pas les en-têtes si déjà présents.
+ *
+ * Aucun onglet ajouté depuis n'exige de relancer setup() : `assurerOnglet_`
+ * crée ce qui manque à la première écriture (cf. `ops`, 2026-08-13).
  */
 function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -95,7 +110,8 @@ function setup() {
 
   seedDefaults_();
   SpreadsheetApp.getUi &&
-    SpreadsheetApp.getActiveSpreadsheet().toast('Setup terminé — 7 onglets prêts.', 'Enthalpie', 5);
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      'Setup terminé — ' + Object.keys(SCHEMA).length + ' onglets prêts.', 'Enthalpie', 5);
 }
 
 /** Pré-remplit objectifs (cibles figées du skill) et parametres si vides. */
@@ -160,6 +176,37 @@ function appendRow_(name, obj) {
   sh.appendRow(headers.map(function (h) {
     return obj[h] === undefined ? '' : obj[h];
   }));
+}
+
+/**
+ * Ajoute PLUSIEURS lignes en une seule écriture. Valider huit aliments faisait
+ * huit `appendRow_` (donc huit allers-retours vers le Sheet, ~200 ms pièce) :
+ * c'est une bonne part de la lenteur ressentie à la validation.
+ */
+function appendRows_(name, objs) {
+  if (!objs || !objs.length) return;
+  var sh = sheet_(name);
+  var headers = SCHEMA[name];
+  var lignes = objs.map(function (obj) {
+    return headers.map(function (h) { return obj[h] === undefined ? '' : obj[h]; });
+  });
+  sh.getRange(sh.getLastRow() + 1, 1, lignes.length, headers.length).setValues(lignes);
+}
+
+/**
+ * Crée un onglet manquant avec ses en-têtes, sans exiger un `setup()` manuel.
+ * Même parade que `assurerCibleFibres_` : une migration ne doit jamais dépendre
+ * d'un geste dans l'éditeur Apps Script — on l'oublie, et la panne est muette.
+ */
+function assurerOnglet_(name) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.getRange(1, 1, 1, SCHEMA[name].length).setValues([SCHEMA[name]]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  return sh;
 }
 
 /** Renvoie {cle: valeur} de l'onglet parametres. */
@@ -273,27 +320,145 @@ function doPost(e) {
   return handle_(e, merged);
 }
 
+// Les actions qui MODIFIENT le Sheet. Elles passent toutes par `ecrire_` :
+// verrou global + déduplication par `op_id`. Aucune ne doit être ajoutée
+// ailleurs — c'est la seule garantie que deux écritures ne se croisent pas.
+var ACTIONS_ECRITURE = { log: 1, commit: 1, add_produit: 1, set_categorie: 1 };
+
 function handle_(e, p) {
+  var action = (p && p.action) || 'state';
   try {
     checkToken_(p.token);
-    var action = p.action || 'state';
-    var result;
-    switch (action) {
-      case 'state':          result = getState_(); break;
-      case 'catalog':        result = getCatalog_(); break;
-      case 'courses':        result = getCourses_(); break;
-      case 'cuisine':        result = getCuisine_(); break;
-      case 'bilan':          result = getBilan_(); break;
-      case 'search_catalog': result = searchCatalog_(p.q); break;
-      case 'log':            result = postLog_(p); break;
-      case 'add_produit':    result = addProduit_(p); break;
-      case 'set_categorie':  result = setCategorie_(p); break;
-      default: throw new Error('Action inconnue : ' + action);
-    }
+    var result = ACTIONS_ECRITURE[action] ? ecrire_(action, p) : lire_(action, p);
     return json_({ ok: true, action: action, data: result });
   } catch (err) {
-    return json_({ ok: false, error: String(err && err.message || err) });
+    // `transient` distingue « réessaie plus tard » (verrou occupé, quota) d'un
+    // refus définitif (ref inconnue, token invalide). Sans ce drapeau, la PWA
+    // abandonne une action récupérable ou, pire, garde en file une action que
+    // le serveur refusera toujours.
+    return json_({
+      ok: false,
+      error: String(err && err.message || err),
+      transient: !!(err && err.transient)
+    });
   }
+}
+
+function lire_(action, p) {
+  switch (action) {
+    // Démarrage en UN aller-retour. Deux GET séparés, c'était deux exécutions
+    // Apps Script (~1,5 s pièce) pour des données lues dans les mêmes onglets.
+    case 'boot':           return { state: getState_(), catalog: getCatalog_() };
+    case 'state':          return getState_();
+    case 'catalog':        return getCatalog_();
+    case 'courses':        return getCourses_();
+    case 'cuisine':        return getCuisine_();
+    case 'bilan':          return getBilan_();
+    case 'search_catalog': return searchCatalog_(p.q);
+    default: throw new Error('Action inconnue : ' + action);
+  }
+}
+
+/**
+ * Toute écriture, sous verrou et dédupliquée.
+ *
+ * Deux garanties, et c'est le correctif du bug de synchro du 2026-08-13 :
+ *  1. **Sérialisation** — `adjustStock_` lit le stock puis le réécrit. Deux
+ *     requêtes concurrentes lisaient la même valeur et la seconde écrasait la
+ *     première : un décrément disparaissait, le stock restait haut, et l'app
+ *     semblait « avoir rajouté des trucs ».
+ *  2. **Idempotence** — Apps Script répond en 1 à 3 s derrière une redirection ;
+ *     sur un réseau mobile, la réponse se perd alors que l'écriture a eu lieu.
+ *     La PWA rejouait alors son action et comptait deux fois. Un `op_id` déjà vu
+ *     n'est plus jamais réappliqué.
+ */
+function ecrire_(action, p) {
+  var opId = trim_((p && p.op_id) || '');
+  var lock = LockService.getScriptLock();
+  try {
+    // 25 s : au-delà, l'exécution frôle de toute façon le quota Apps Script.
+    if (!lock.tryLock(25000)) {
+      var occupe = new Error('Serveur occupé (écriture concurrente). Réessaie.');
+      occupe.transient = true;
+      throw occupe;
+    }
+  } catch (err) {
+    if (err && err.transient) throw err;
+    var indispo = new Error('Verrou indisponible : ' + (err && err.message || err));
+    indispo.transient = true;
+    throw indispo;
+  }
+
+  try {
+    if (opId) {
+      var vue = opVue_(opId);
+      // Déjà appliquée : on renvoie une réponse VALIDE (pas une erreur), sinon
+      // la PWA croirait l'action perdue et la remettrait en file indéfiniment.
+      if (vue) return rejeu_(action, vue);
+    }
+    var res;
+    switch (action) {
+      case 'log':           res = postLog_(p); break;
+      case 'commit':        res = commit_(p); break;
+      case 'add_produit':   res = addProduit_(p); break;
+      case 'set_categorie': res = setCategorie_(p); break;
+      default: throw new Error('Action inconnue : ' + action);
+    }
+    if (opId) enregistrerOp_(opId, action, res);
+    return res;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* ---- Idempotence : journal des op_id déjà appliqués ---- */
+
+/** Ligne de l'onglet `ops` pour cet op_id, ou null. */
+function opVue_(opId) {
+  assurerOnglet_('ops');
+  var vals = sheet_('ops').getDataRange().getValues();
+  for (var r = vals.length - 1; r >= 1; r--) {          // du plus récent au plus ancien
+    if (String(vals[r][0]) === String(opId)) {
+      return { op_id: vals[r][0], timestamp: vals[r][1], action: vals[r][2], resume: vals[r][3] };
+    }
+  }
+  return null;
+}
+
+/** Trace une écriture appliquée. `resume` reste court : c'est un accusé, pas une copie. */
+function enregistrerOp_(opId, action, res) {
+  assurerOnglet_('ops');
+  var resume = '';
+  try { resume = JSON.stringify(res).slice(0, 400); } catch (e) { resume = ''; }
+  appendRow_('ops', { op_id: opId, timestamp: new Date(), action: action, resume: resume });
+  purgerOps_();
+}
+
+// Une file offline ne se rejoue jamais au-delà de quelques jours : garder
+// 30 jours d'op_id est large, et borne la lecture de l'onglet.
+var OPS_RETENTION_JOURS = 30;
+function purgerOps_() {
+  try {
+    var sh = sheet_('ops');
+    if (sh.getLastRow() < 400) return;                  // rien à gagner avant
+    var limite = Date.now() - OPS_RETENTION_JOURS * 86400000;
+    var vals = sh.getDataRange().getValues();
+    var garde = 1;                                      // 1re ligne de données à garder
+    while (garde < vals.length && tsOf_(vals[garde][1]) < limite) garde++;
+    if (garde > 1) sh.deleteRows(2, garde - 1);
+  } catch (e) { Logger.log('purgerOps_ : ' + e); }
+}
+
+/**
+ * Réponse à une action rejouée. Rien n'est réappliqué ; on renvoie l'accusé
+ * d'origine, plus l'état frais pour les actions dont la PWA attend un état
+ * (un `commit` rejoué doit repartir avec la vérité du serveur, pas dans le vide).
+ */
+function rejeu_(action, vue) {
+  var out = { deja_traite: true, op_id: vue.op_id, applique_le: vue.timestamp };
+  try { if (vue.resume) out.resume = JSON.parse(vue.resume); } catch (e) { /* résumé tronqué */ }
+  if (action === 'commit') out.state = getState_();
+  return out;
 }
 
 function checkToken_(token) {
@@ -671,6 +836,109 @@ function postLog_(p) {
   }
 }
 
+/* ---------------------------------------------------------------------- */
+/* Validation groupée de l'inventaire (action `commit`)                     */
+/* ---------------------------------------------------------------------- */
+
+/**
+ * Applique TOUS les mouvements de curseurs d'un coup et renvoie l'état frais.
+ *
+ * Corps : { action:'commit', op_id, changes:[{ ref, kind:'produit'|'plat', delta }] }
+ * `delta` en grammes : > 0 = consommé, < 0 = correction (« je n'avais pas mangé ça »).
+ *
+ * Pourquoi une action dédiée (2026-08-13) : la PWA envoyait un POST par aliment
+ * puis deux GET de recalage — huit aliments valaient dix exécutions Apps Script,
+ * concurrentes qui plus est. Ici : une exécution, un verrou, une écriture de
+ * stock, une réponse qui contient déjà le nouvel état.
+ *
+ * **Une correction annule la consommation du jour, pas seulement le stock.**
+ * C'est le second bug du 2026-08-13 : reculer un curseur passait par un
+ * `ajustement`, que `getState_` ignore pour les jauges — le stock revenait, les
+ * calories restaient. On journalise donc une quantité NÉGATIVE, plafonnée à ce
+ * qui a été logué aujourd'hui pour cette référence : le reliquat (une saisie
+ * d'hier qu'on corrige ce matin) part en `ajustement`, car il ne doit surtout
+ * pas creuser les jauges du jour.
+ */
+function commit_(p) {
+  var changes = (p && p.changes) || [];
+  if (!changes.length) throw new Error('changes requis (liste des mouvements).');
+
+  var tz = params_().tz || 'Europe/Paris';
+  var now = new Date();
+  var today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  var produitsById = indexBy_(readTable_('produits'), 'id');
+  var platsById = indexBy_(readTable_('plats'), 'id');
+
+  // Consommation déjà journalisée AUJOURD'HUI, par référence : c'est le plafond
+  // de ce qu'une correction peut annuler.
+  var consoJour = {};
+  readTable_('log').forEach(function (l) {
+    if (l.type !== 'plat' && l.type !== 'produit') return;
+    if (formatTs_(l.timestamp, tz) !== today) return;
+    var k = String(l.ref);
+    consoJour[k] = (consoJour[k] || 0) + (Number(l.quantite) || 0);
+  });
+
+  var deltas = {};      // ref → variation de stock (g), cumulée avant écriture
+  var lignes = [];      // lignes de log, écrites en un seul bloc
+  var applique = [];
+  var ignores = [];
+  var pousser = function (ref, g) { deltas[ref] = (deltas[ref] || 0) + g; };
+
+  changes.forEach(function (c) {
+    var ref = trim_((c && c.ref) || '');
+    var d = round2_(Number(c && c.delta) || 0);
+    if (!ref || !d) return;
+
+    var pl = platsById[ref];
+    var estPlat = String(c.kind) === 'plat' || (!produitsById[ref] && !!pl);
+    // Référence inconnue : on l'écarte et on le dit, sans faire échouer le lot.
+    // Lever ici perdrait les sept autres aliments de la validation — et la PWA
+    // classerait le rejet comme définitif, donc l'action serait abandonnée.
+    if (estPlat ? !pl : !produitsById[ref]) { ignores.push(ref); return; }
+    var type = estPlat ? 'plat' : 'produit';
+    var source = trim_(c.source || '') || 'curseur';
+
+    // Le stock bouge dans les deux sens de la même façon : ce qu'on mange sort,
+    // ce qu'on corrige revient. `-d` couvre les deux cas.
+    if (estPlat && String(pl.type) !== 'batch') {
+      // Assemblage : ce sont les INGRÉDIENTS qui bougent, au prorata de la fournée.
+      var poids = poidsFournee_(pl);
+      var part = poids > 0 ? d / poids : 0;
+      composition_(pl).forEach(function (ing) { pousser(ing.produit_id, -ing.grammes * part); });
+    } else {
+      pousser(ref, -d);
+    }
+
+    if (d > 0) {
+      lignes.push({ timestamp: now, type: type, ref: ref, quantite: d, source: source });
+      consoJour[ref] = (consoJour[ref] || 0) + d;
+      applique.push({ ref: ref, mange_g: d });
+    } else {
+      var annulable = Math.min(-d, Math.max(0, consoJour[ref] || 0));
+      if (annulable > 0) {
+        lignes.push({ timestamp: now, type: type, ref: ref, quantite: -annulable, source: 'correction' });
+        consoJour[ref] -= annulable;
+      }
+      var residu = round2_(-d - annulable);
+      if (residu > 0) {
+        // Rien à annuler dans la journée : la saisie corrigée date d'un jour
+        // précédent. Seul le stock revient — creuser les jauges d'aujourd'hui
+        // avec une erreur d'hier serait un second mensonge.
+        lignes.push({ timestamp: now, type: 'ajustement', ref: ref, quantite: residu, source: 'correction' });
+      }
+      applique.push({ ref: ref, rendu_g: -d, conso_annulee_g: annulable });
+    }
+  });
+
+  appendRows_('log', lignes);
+  appliquerDeltas_(deltas);
+
+  // L'état frais voyage AVEC la réponse : plus besoin d'un GET de recalage, et
+  // surtout la PWA n'a plus à deviner ce que le serveur a retenu.
+  return { applique: applique, ignores: ignores, state: getState_() };
+}
+
 /** Log d'un plat consommé → journal + décrément du stock des ingrédients. */
 function logPlat_(p, now) {
   if (!p.ref) throw new Error('ref (plat_id) requis.');
@@ -970,6 +1238,42 @@ function setStock_(ref, grammes) {
 function adjustStock_(ref, delta) {
   var cur = Number(stockMap_()[ref] || 0);
   setStock_(ref, cur + delta); // le stock peut passer sous 0 (info de dérive)
+}
+
+/**
+ * Applique un lot de variations {ref: delta} en UNE lecture et UNE écriture.
+ * `adjustStock_` relit tout l'onglet à chaque référence : sur une validation de
+ * huit aliments, ça faisait seize allers-retours vers le Sheet.
+ */
+function appliquerDeltas_(deltas) {
+  var refs = Object.keys(deltas || {}).filter(function (r) { return deltas[r]; });
+  if (!refs.length) return;
+
+  var sh = sheet_('stock');
+  var vals = sh.getDataRange().getValues();
+  var ligneDe = {};
+  for (var r = 1; r < vals.length; r++) ligneDe[String(vals[r][0])] = r;
+
+  var nouvelles = [];
+  refs.forEach(function (ref) {
+    var i = ligneDe[ref];
+    if (i == null) nouvelles.push([ref, round2_(deltas[ref])]);
+    else vals[i][1] = round2_((Number(vals[i][1]) || 0) + deltas[ref]);
+  });
+
+  // Réécrit la colonne des grammes en un bloc, puis ajoute les refs inconnues.
+  // Une ligne sans référence est recopiée telle quelle : y écrire un 0 la
+  // rendrait « non vide » et ferait apparaître une entrée fantôme dans le stock.
+  if (vals.length > 1) {
+    sh.getRange(2, 2, vals.length - 1, 1).setValues(vals.slice(1).map(function (row) {
+      var g = row.length > 1 ? row[1] : '';
+      if (trim_(row[0]) === '') return [g == null ? '' : g];
+      return [g === '' || g == null ? 0 : g];
+    }));
+  }
+  if (nouvelles.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, nouvelles.length, 2).setValues(nouvelles);
+  }
 }
 
 /* ===================================================================== */

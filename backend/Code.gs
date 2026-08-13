@@ -244,14 +244,22 @@ function readTail_(name, colTemps, depuisMs) {
 /** Lignes de `log` depuis `depuisMs` (null = tout l'historique). */
 function readLog_(depuisMs) { return readTail_('log', 'timestamp', depuisMs); }
 
-/** Minuit local du jour, en millisecondes — coupure des lectures « du jour ». */
+/**
+ * Coupure des lectures « du jour », en millisecondes.
+ *
+ * Volontairement LARGE : minuit moins 26 heures. La date du jour est calculée
+ * dans le fuseau du paramètre `tz`, alors que `new Date(a, m, j)` construit son
+ * minuit dans celui du script — les deux coïncident aujourd'hui (Europe/Paris
+ * des deux côtés) mais rien ne le garantit, et un décalage ferait disparaître
+ * les apports du matin. Les appelants refiltrent tous sur la date exacte
+ * (`formatTs_(…) !== today`) : lire un jour de trop ne coûte qu'une poignée de
+ * lignes, en rater une coûte un repas.
+ */
 function debutDuJour_(tz) {
   var iso = Utilities.formatDate(new Date(), tz || 'Europe/Paris', 'yyyy-MM-dd');
   var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-  if (!m) return null;
-  // Marge d'une heure : le fuseau du script et celui du paramètre `tz` peuvent
-  // différer, et rater une ligne du matin vaudrait un apport perdu.
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() - 3600000;
+  if (!m) return null;                    // date illisible → lecture complète
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() - 26 * 3600000;
 }
 
 /** Ajoute une ligne depuis un objet, dans l'ordre des en-têtes. */

@@ -37,15 +37,45 @@ Refonte du **2026-08-13**, après des doubles comptages en usage réel :
   tentative perdue (`store.enqueue` s'en charge si le payload le porte).
 - **Toute écriture passe par `ecrire_()`** côté backend, donc par `LockService`. Sans verrou,
   deux `adjustStock_` concurrents lisent le même stock et le second écrase le premier.
-- **L'écran Aujourd'hui ne peint que l'état du serveur.** Plus d'optimisme sur le stock ni sur
-  les jauges (sauf mode démo). Pendant l'envoi, les lignes sont gelées ; si le lot part en file,
-  elles restent gelées, marquées « en attente », et un bandeau prévient que les chiffres ne
-  comptent pas encore ces modifications. Empiler une saisie sur un état local divergent était
-  la manœuvre exacte qui produisait les doublons.
+- **L'écran Aujourd'hui ne peint que l'état du serveur.** Aucun optimisme sur le **stock**.
+  Pendant l'envoi, les lignes sont gelées ; si le lot part en file, elles restent gelées,
+  marquées « en attente », et un bandeau prévient que les chiffres ne comptent pas encore ces
+  modifications. Empiler une saisie sur un état local divergent était la manœuvre exacte qui
+  produisait les doublons.
+  - **Seule exception, ajoutée le 2026-08-13 :** au tap sur « Valider », les anneaux partent vers
+    la valeur **projetée** (macros × grammes, calculées localement), en teinte atténuée, et se
+    calent sur la réponse. Ce n'est pas un retour de l'optimisme d'avant : la projection **n'est
+    écrite nulle part** et se recalcule depuis l'état serveur à chaque peinture — un échec
+    d'envoi la reprend. Ce qui produisait les doublons était un bump **persisté** qui survivait à
+    l'échec. La ligne de partage à tenir : *on peut anticiper un affichage dérivé, jamais
+    mémoriser un état que le serveur n'a pas confirmé.*
 - **Un curseur reculé retire aussi les apports du jour**, plafonné à ce qui a été logué le jour
   même (`commit_`) : un `ajustement` seul ne touche pas les jauges, c'était le bug.
-- Un lot de curseurs = **un seul POST `commit`**, dont la réponse contient l'état frais.
-  Démarrage = **un seul GET `boot`** (state + catalog). Ne pas revenir à N appels.
+- Un lot de curseurs = **un seul POST `commit`**. Démarrage = **un seul GET `boot`**
+  (state + catalog). Ne pas revenir à N appels.
+- **Toute réponse d'écriture contient l'état frais** (`ecrire_` l'attache, plus le catalogue
+  quand il a pu changer). La PWA l'adopte : **ne jamais réintroduire un `boot` enchaîné derrière
+  une écriture** — c'était deux exécutions Apps Script pour un seul geste.
+
+## Règle n°3 : la lenteur vient d'Apps Script, pas de nous
+
+Mesuré le **2026-08-13** (12 appels sur une requête à une seule lecture d'onglet) : médiane
+~2,3 s, mais **un appel sur trois dépasse 22 s**, max 36,6 s. Tout ce temps part dans le
+**premier saut HTTP** (`script.google.com`, où le script s'exécute) ; le second, qui rapporte le
+corps, coûte 0,3 s. Ce plancher de ~1,8 s est l'ordonnancement de Google et ne s'optimise pas.
+
+- Les appels lents **finissent par réussir**. `fetchDouble` (`pwa/js/api.js`) en lance donc un
+  second à 6 s (12 s en écriture) et garde celui qui répond ; l'`op_id` rend le doublon inoffensif.
+  **Toute écriture doit en porter un** — `apiPost` en frappe un si l'appelant n'en fournit pas.
+- **Un timeout ne veut pas dire « hors-ligne ».** Vérifier `navigator.onLine` avant de l'écrire :
+  annoncer une panne de réseau à quelqu'un de connecté l'envoie chercher un problème inexistant.
+- Côté backend, ce qui s'ajoute au plancher se réduit vraiment : mémo par exécution
+  (`readTable_`), lectures bornées à la queue de `log`/`ops` (`readTail_`), `boot` en
+  `CacheService` sous **clé versionnée** — versionnée et non effacée, sinon une lecture partie
+  avant l'écriture peut y redéposer un état périmé. **Ne pas ajouter de lecture d'onglet non
+  mémoïsée sur un chemin de requête.**
+- **Ne jamais conclure à une panne du backend sur un seul appel lent** : refaire la mesure,
+  `-m 90`. Détail chiffré dans `backend-doc/README.md` §1 (OneDrive).
 
 ## Deux invariants du scan / de toute entrée de stock
 
@@ -86,6 +116,12 @@ Prérequis non versionnés : `backend/.clasp.json` et `backend/.deployment-id`.
 pourrait ne pas encore renvoyer (jauge fibres, `jours[]` du bilan) ; l'ordre inverse afficherait une
 version dégradée le temps du décalage. Et **bumper `CACHE` dans `pwa/sw.js`** à chaque release,
 sinon l'ancien app-shell reste servi et la modif n'apparaît pas — le piège classique de ce projet.
+`APP_VERSION` (`pwa/js/config.js`) se bumpe **avec** lui : les Réglages affichent les deux, et une
+divergence est le symptôme d'une mise à jour à moitié appliquée.
+
+Publication de la PWA : `git subtree push --prefix=pwa origin gh-pages`. GitHub Pages sert
+l'ancienne version jusqu'à ~10 min (`max-age=600`) — vérifier avec un paramètre anti-cache avant
+de croire à un échec de déploiement.
 
 **Piège curl** : ne jamais mettre `-X POST` pour appeler l'API. Apps Script répond 302 ; avec
 `-X POST` curl re-POSTe sur la cible et reçoit une page HTML d'erreur **alors que l'écriture a eu

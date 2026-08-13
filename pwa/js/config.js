@@ -6,7 +6,7 @@
 // classique, il ne peut pas importer ce module. L'écran Réglages affiche donc
 // les DEUX valeurs : si elles divergent, l'anomalie se voit au lieu de rester
 // silencieuse (typiquement : app-shell en cache plus vieux que le code chargé).
-export const APP_VERSION = 'v22';
+export const APP_VERSION = 'v23';
 
 // API_BASE du backend Apps Script déjà déployé (cf. BUILD-PWA.md §1).
 export const DEFAULT_API_BASE =

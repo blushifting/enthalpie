@@ -85,7 +85,57 @@
       "P10": 0,
       "P12": 0,
       "M01": 600
-    }
+    },
+    "journal": [
+      {
+        "id": "produit:P01",
+        "type": "produit",
+        "rang": -1,
+        "ref": "P01",
+        "nom": "Yaourt grec nature",
+        "grammes": 300,
+        "paquet_g": 1000,
+        "kcal": 216,
+        "prot_g": 21.6,
+        "fibres_g": 0
+      },
+      {
+        "id": "produit:P03",
+        "type": "produit",
+        "rang": -1,
+        "ref": "P03",
+        "nom": "Lentilles corail cuites",
+        "grammes": 125,
+        "paquet_g": 250,
+        "kcal": 115,
+        "prot_g": 9,
+        "fibres_g": 4.4
+      },
+      {
+        "id": "ext:0",
+        "type": "exterieur",
+        "rang": 0,
+        "ref": "X02",
+        "nom": "Resto normal",
+        "grammes": 0,
+        "paquet_g": 0,
+        "kcal": 800,
+        "prot_g": 25,
+        "fibres_g": 5
+      },
+      {
+        "id": "produit:P02",
+        "type": "produit",
+        "rang": -1,
+        "ref": "P02",
+        "nom": "Tofu ferme",
+        "grammes": 100,
+        "paquet_g": 200,
+        "kcal": 120,
+        "prot_g": 14,
+        "fibres_g": 1.2
+      }
+    ]
   },
   "catalog": {
     "produits": [
@@ -474,13 +524,62 @@
       }
     ],
     "jours": [
-      { "date": "2026-07-04", "label": "sam.", "a_donnees": true,  "kcal": 3020, "prot_g": 118, "fibres_g": 27.4 },
-      { "date": "2026-07-05", "label": "dim.", "a_donnees": true,  "kcal": 2640, "prot_g": 101, "fibres_g": 18.9 },
-      { "date": "2026-07-06", "label": "lun.", "a_donnees": true,  "kcal": 2900, "prot_g": 115, "fibres_g": 25.2 },
-      { "date": "2026-07-07", "label": "mar.", "a_donnees": true,  "kcal": 2870, "prot_g": 109, "fibres_g": 22.6 },
-      { "date": "2026-07-08", "label": "mer.", "a_donnees": true,  "kcal": 2650, "prot_g": 102, "fibres_g": 16.8 },
-      { "date": "2026-07-09", "label": "jeu.", "a_donnees": true,  "kcal": 2910, "prot_g": 114, "fibres_g": 29.7 },
-      { "date": "2026-07-10", "label": "Auj.", "a_donnees": true,  "kcal": 2810, "prot_g": 108, "fibres_g": 24.1 }
+      {
+        "date": "2026-07-04",
+        "label": "sam.",
+        "a_donnees": true,
+        "kcal": 3020,
+        "prot_g": 118,
+        "fibres_g": 27.4
+      },
+      {
+        "date": "2026-07-05",
+        "label": "dim.",
+        "a_donnees": true,
+        "kcal": 2640,
+        "prot_g": 101,
+        "fibres_g": 18.9
+      },
+      {
+        "date": "2026-07-06",
+        "label": "lun.",
+        "a_donnees": true,
+        "kcal": 2900,
+        "prot_g": 115,
+        "fibres_g": 25.2
+      },
+      {
+        "date": "2026-07-07",
+        "label": "mar.",
+        "a_donnees": true,
+        "kcal": 2870,
+        "prot_g": 109,
+        "fibres_g": 22.6
+      },
+      {
+        "date": "2026-07-08",
+        "label": "mer.",
+        "a_donnees": true,
+        "kcal": 2650,
+        "prot_g": 102,
+        "fibres_g": 16.8
+      },
+      {
+        "date": "2026-07-09",
+        "label": "jeu.",
+        "a_donnees": true,
+        "kcal": 2910,
+        "prot_g": 114,
+        "fibres_g": 29.7
+      },
+      {
+        "date": "2026-07-10",
+        "label": "Auj.",
+        "a_donnees": true,
+        "kcal": 2810,
+        "prot_g": 108,
+        "fibres_g": 24.1
+      }
     ],
     "streak_prot": 3
   }

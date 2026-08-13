@@ -8,7 +8,7 @@
  *
  * Endpoints :
  *   GET  ?token=…&action=boot           → { state, catalog } en UN aller-retour
- *   GET  ?token=…&action=state          → jauges du jour, pools par créneau, stock
+ *   GET  ?token=…&action=state          → jauges du jour, pools par créneau, stock, journal du jour
  *   GET  ?token=…&action=catalog        → produits + plats actifs
  *   GET  ?token=…&action=courses        → liste de courses (par magasin/rayon)
  *   GET  ?token=…&action=cuisine        → recette de la semaine + biblio batch + compteurs
@@ -16,6 +16,7 @@
  *   POST {token, action:'commit', op_id, changes:[…]} → tout l'inventaire d'un coup + état frais
  *   POST {token, action:'log', ...}     → plat | produit | pot_fini | batch_cuisine | courses | ajustement | exterieur
  *   POST {token, action:'set_categorie', items:[{produit_id, categorie}]} → rangement du stock
+ *   POST {token, action:'annuler_exterieur', op_id, rang} → retire un repas extérieur du jour
  *
  * TOUTE écriture est sérialisée (verrou) et idempotente si elle porte un `op_id`
  * (cf. §4). C'est la règle qui empêche un rejeu de compter deux fois — le bug
@@ -323,7 +324,9 @@ function doPost(e) {
 // Les actions qui MODIFIENT le Sheet. Elles passent toutes par `ecrire_` :
 // verrou global + déduplication par `op_id`. Aucune ne doit être ajoutée
 // ailleurs — c'est la seule garantie que deux écritures ne se croisent pas.
-var ACTIONS_ECRITURE = { log: 1, commit: 1, add_produit: 1, set_categorie: 1 };
+var ACTIONS_ECRITURE = {
+  log: 1, commit: 1, add_produit: 1, set_categorie: 1, annuler_exterieur: 1
+};
 
 function handle_(e, p) {
   var action = (p && p.action) || 'state';
@@ -402,6 +405,7 @@ function ecrire_(action, p) {
       case 'commit':        res = commit_(p); break;
       case 'add_produit':   res = addProduit_(p); break;
       case 'set_categorie': res = setCategorie_(p); break;
+      case 'annuler_exterieur': res = annulerExterieur_(p); break;
       default: throw new Error('Action inconnue : ' + action);
     }
     if (opId) enregistrerOp_(opId, action, res);
@@ -457,7 +461,7 @@ function purgerOps_() {
 function rejeu_(action, vue) {
   var out = { deja_traite: true, op_id: vue.op_id, applique_le: vue.timestamp };
   try { if (vue.resume) out.resume = JSON.parse(vue.resume); } catch (e) { /* résumé tronqué */ }
-  if (action === 'commit') out.state = getState_();
+  if (action === 'commit' || action === 'annuler_exterieur') out.state = getState_();
   return out;
 }
 
@@ -532,8 +536,84 @@ function getState_() {
     creneau_courant: creneauCourant_(tz),
     jauges: jauges,
     pools: pools,
-    stock: stock
+    stock: stock,
+    journal: journalDuJour_(tz, today, platsById, produitsById)
   };
+}
+
+/**
+ * Ce qui a été mangé aujourd'hui, tel que la PWA le relit sous les jauges
+ * (2026-08-13). Deux règles :
+ *
+ *  1. **Agrégé par aliment**, pas par ligne de log. Faire avancer le curseur du
+ *     riz trois fois dans la journée produit trois lignes ; ce qu'on relit et
+ *     ce qu'on corrige, c'est le cumul — c'est d'ailleurs ce que le curseur
+ *     lui-même affiche. Les corrections déjà passées (quantités négatives) sont
+ *     dans la somme, donc un aliment ramené à zéro disparaît de la liste.
+ *  2. **Un repas extérieur reste une entrée à part entière** : deux restos dans
+ *     la journée sont deux repas, pas « 2 × repas extérieur ». Son `rang` est sa
+ *     position parmi les extérieurs DU JOUR — l'identifiant qui permet d'en
+ *     retirer un seul (les lignes de log n'ont pas d'id, et les nouvelles
+ *     s'ajoutent toujours après, donc le rang d'une entrée affichée ne bouge pas).
+ */
+function journalDuJour_(tz, today, platsById, produitsById) {
+  var parRef = {};
+  var ordre = [];
+  var sorties = [];
+  var rangExt = 0;
+
+  readTable_('log').forEach(function (l) {
+    if (formatTs_(l.timestamp, tz) !== today) return;
+
+    if (l.type === 'exterieur') {
+      var m = parseExtra_(l.extra);
+      var preset = platsById[l.ref];
+      sorties.push({
+        id: 'ext:' + rangExt, type: 'exterieur', rang: rangExt,
+        ref: l.ref || '', nom: (preset && preset.nom) || 'Repas extérieur',
+        grammes: 0, paquet_g: 0,
+        kcal: round1_(m.kcal), prot_g: round1_(m.prot_g), fibres_g: round1_(m.fibres_g)
+      });
+      rangExt++;
+      return;
+    }
+    // `ajustement` est un mouvement de stock sans repas derrière (correction
+    // d'une saisie d'un autre jour) : il n'a rien à faire dans « ce que j'ai
+    // mangé aujourd'hui ».
+    if (l.type !== 'plat' && l.type !== 'produit') return;
+
+    var ref = String(l.ref);
+    var cle = l.type + ':' + ref;
+    if (!parRef[cle]) {
+      var src = l.type === 'plat' ? platsById[ref] : produitsById[ref];
+      if (!src) return;                       // référence disparue du catalogue
+      parRef[cle] = {
+        id: cle, type: l.type, rang: -1, ref: ref,
+        nom: src.nom || ref, grammes: 0,
+        paquet_g: l.type === 'plat'
+          ? Math.round(poidsFournee_(src))     // la fournée tient lieu de paquet
+          : (Number(src.poids_paquet_g) || 0),
+        kcal: 0, prot_g: 0, fibres_g: 0
+      };
+      ordre.push(cle);
+    }
+    parRef[cle].grammes += (Number(l.quantite) || 0);
+  });
+
+  ordre.forEach(function (cle) {
+    var e = parRef[cle];
+    var g = round2_(e.grammes);
+    if (!(g > 0.01)) return;                  // entièrement corrigé → plus rien à montrer
+    var m = e.type === 'plat' ? macrosOf_(e.ref, platsById) : macrosProduit_(e.ref, produitsById);
+    var f = g / 100;                          // macros pour 100 g (règle du gramme)
+    e.grammes = g;
+    e.kcal = round1_(m.kcal * f);
+    e.prot_g = round1_(m.prot_g * f);
+    e.fibres_g = round1_((m.fibres_g || 0) * f);
+    sorties.push(e);
+  });
+
+  return sorties;
 }
 
 function getCatalog_() {
@@ -541,11 +621,20 @@ function getCatalog_() {
   // Un plat cuisiné n'a pas d'emballage : son « paquet » est la fournée. Le
   // front en a besoin comme référence du curseur (% de la fournée mangé), et
   // ce poids n'est pas une colonne — il se déduit de la composition.
+  var produits = readTable_('produits').filter(actif_);
+  var produitsById = indexBy_(produits, 'id');
   var plats = readTable_('plats').filter(actif_).map(function (pl) {
     pl.poids_fournee_g = Math.round(poidsFournee_(pl));
+    // L'onglet `plats` n'a pas de colonnes d'allergènes : les badges G/L d'un
+    // plat cuisiné se déduisent de sa composition (2026-08-13). Un ingrédient
+    // au flag vide (« on ne sait pas ») ne rend pas le plat positif — l'app ne
+    // décrète jamais la présence d'un allergène qu'elle n'a pas lue.
+    var f = flagsComposition_(pl, produitsById);
+    pl.flag_gluten = f.gluten;
+    pl.flag_lactose = f.lactose;
     return pl;
   });
-  return { produits: readTable_('produits').filter(actif_), plats: plats };
+  return { produits: produits, plats: plats };
 }
 
 /** Recherche catalogue (tuile « ➕ autre » / scan) : produits actifs par nom ou EAN. */
@@ -1139,6 +1228,28 @@ function nextProduitId_(produits) {
 }
 
 /** Normalise un flag oui/non (défaut : chaîne vide = inconnu). */
+/**
+ * Allergènes d'un plat, hérités de ses ingrédients : 'oui' dès qu'un ingrédient
+ * est positif, '' (inconnu) si aucun ne l'est mais qu'au moins un n'est pas
+ * renseigné, 'non' seulement quand toute la composition est documentée et
+ * négative. Le « je ne sais pas » ne se transforme jamais en « non ».
+ */
+function flagsComposition_(pl, produitsById) {
+  var out = { gluten: 'non', lactose: 'non' };
+  var inconnu = { gluten: false, lactose: false };
+  composition_(pl).forEach(function (c) {
+    var pr = produitsById[c.produit_id];
+    ['gluten', 'lactose'].forEach(function (k) {
+      var v = pr ? normFlag_(pr['flag_' + k]) : '';
+      if (v === 'oui') out[k] = 'oui';
+      else if (v === '') inconnu[k] = true;
+    });
+  });
+  if (out.gluten !== 'oui' && inconnu.gluten) out.gluten = '';
+  if (out.lactose !== 'oui' && inconnu.lactose) out.lactose = '';
+  return out;
+}
+
 function normFlag_(v) {
   var s = String(v == null ? '' : v).toLowerCase();
   if (s === 'oui' || s === 'true' || s === '1' || s === 'yes') return 'oui';
@@ -1216,6 +1327,50 @@ function exterieur_(p, now) {
     source: p.source || 'tap', extra: JSON.stringify(macros)
   });
   return { exterieur: macros, ref: p.ref || '' };
+}
+
+/**
+ * Retire un repas extérieur du jour depuis le résumé de la journée (2026-08-13).
+ *
+ * Corps : { action:'annuler_exterieur', op_id, rang, kcal? }
+ * `rang` = position parmi les extérieurs d'AUJOURD'HUI, telle que `journalDuJour_`
+ * l'a servie. `kcal` est facultatif mais vérifié quand il est là : si la ligne
+ * trouvée ne porte pas ce montant, c'est que l'écran affichait un journal
+ * périmé — mieux vaut refuser que supprimer le mauvais repas.
+ *
+ * La ligne est retirée pour de bon, pas neutralisée par une ligne négative :
+ * c'est une saisie erronée, et une paire « +800 / −800 » polluerait le résumé
+ * du jour qu'on vient justement d'ajouter. La trace reste dans `ops`.
+ */
+function annulerExterieur_(p) {
+  var rang = Number(p && p.rang);
+  if (!(rang >= 0)) throw new Error('rang requis (position du repas dans la journée).');
+
+  var tz = params_().tz || 'Europe/Paris';
+  var today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  var sh = sheet_('log');
+  var vals = sh.getDataRange().getValues();
+  var head = vals[0];
+  var cType = head.indexOf('type');
+  var cTs = head.indexOf('timestamp');
+  var cExtra = head.indexOf('extra');
+
+  var vu = -1;
+  for (var r = 1; r < vals.length; r++) {
+    if (String(vals[r][cType]) !== 'exterieur') continue;
+    if (formatTs_(vals[r][cTs], tz) !== today) continue;
+    vu++;
+    if (vu !== rang) continue;
+
+    var m = parseExtra_(vals[r][cExtra]);
+    var attendu = Number(p.kcal);
+    if (p.kcal != null && p.kcal !== '' && Math.abs(m.kcal - attendu) > 1) {
+      throw new Error('Le repas affiché ne correspond plus à celui enregistré. Recharge l’écran.');
+    }
+    sh.deleteRow(r + 1);                       // +1 : la ligne d'en-tête
+    return { annule: 'exterieur', rang: rang, kcal: m.kcal, state: getState_() };
+  }
+  throw new Error('Repas extérieur introuvable (déjà retiré ?).');
 }
 
 /** Parse la colonne `extra` d'un log (JSON de macros) → {kcal,prot_g,fibres_g}. */

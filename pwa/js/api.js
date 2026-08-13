@@ -129,6 +129,14 @@ export const logCourses  = (items, id) => postLog({ type: 'courses', items, op_i
 export const logPotFini  = (ref, id) => postLog({ type: 'pot_fini', ref, source: 'scan', op_id: id });
 export const logBatch    = (ref, id) => postLog({ type: 'batch_cuisine', ref, op_id: id });
 export const logExterieur = (macros, id) => postLog({ type: 'exterieur', ...macros, op_id: id });
+/**
+ * Retire un repas extérieur du journal du jour (✕ du résumé, 2026-08-13).
+ * `rang` = sa position parmi les extérieurs du jour, telle que servie par
+ * `state.journal` ; `kcal` sert de contrôle côté serveur pour ne pas supprimer
+ * un autre repas si l'écran affichait un journal périmé.
+ */
+export const annulerExterieur = (rang, kcal, id) =>
+  apiPost({ action: 'annuler_exterieur', rang, kcal, op_id: id });
 
 // --- Scan : ajout catalogue + recherche (action dédiée, hors "log") ---
 // Nécessitent le redéploiement du backend (endpoints add_produit / search_catalog).

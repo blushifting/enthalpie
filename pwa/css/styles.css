@@ -442,11 +442,33 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   border-radius: var(--radius-sm); padding: 12px 14px 14px;
   transition: border-color .15s ease, background .15s ease;
 }
+/* Liseré de gauche = macro dominante de l'aliment (2026-08-13), aux couleurs
+   des trois jauges — le stock était monochrome, il fallait lire chaque nom pour
+   savoir ce qu'on avait sous les yeux. Le classement est calculé en JS
+   (macroDominante) : la part de cible couverte par 100 g, pas une valeur brute.
+   Ces règles sont volontairement placées AVANT celles des états (is-dirty,
+   is-attente, flash) : un liseré ambre « modifié » doit l'emporter sur la
+   couleur de macro, et leur double classe suffit à trancher la cascade. */
+.inv-row--prot   { border-left-color: var(--prot); }
+.inv-row--kcal   { border-left-color: var(--kcal); }
+.inv-row--fibres { border-left-color: var(--fibres); }
+/* Rien de marquant pour 100 g (épices, bouillon) : gris, et c'est une info. */
+.inv-row--neutre { border-left-color: var(--line); }
+
 .inv-row__top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .inv-row__nom { font-size: 15px; font-weight: 600; line-height: 1.25; min-width: 0; }
 .inv-row__level {
   flex-shrink: 0; font-size: 16px; font-weight: 700; color: var(--txt);
   font-variant-numeric: tabular-nums;
+}
+/* Badges allergènes G / L : gris, à la suite du nom. Ni rouge ni orange — ce
+   sont des étiquettes de composition, pas des avertissements, et les couleurs
+   de la ligne appartiennent déjà aux macros. */
+.inv-row__flag {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 17px; height: 17px; margin-left: 5px; vertical-align: 1px;
+  border-radius: 5px; background: var(--surface-2); color: var(--txt-dim);
+  font-size: 10px; font-weight: 700; line-height: 1;
 }
 
 /* Bloc info masqué par défaut (toggle « ⓘ nutri »). */
@@ -829,6 +851,46 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 /* ---------- Bloc « Repas extérieur » (écran Aujourd'hui) ---------- */
 /* Juste sous les jauges : la liste d'en-tête garde son rythme, mais le bloc
    respire un peu moins que quand il fermait l'écran. */
+/* =====================================================================
+   Résumé du jour (« Mangé aujourd'hui ») — entre les jauges et le repas
+   extérieur. Volontairement minimal : un nom, la part du paquet, un ✕.
+   Les jauges au-dessus portent déjà les totaux, le détail nutritionnel est
+   dans le mode « ⓘ nutri » du stock ; ce bloc sert à relire et à corriger.
+   ===================================================================== */
+.jrn-section { margin-top: 4px; }
+.jrn-section .list-head { margin-top: 16px; }
+.list-head__n { font-size: 11.5px; color: var(--txt-dim); font-weight: 600; }
+
+.jrn {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); overflow: hidden;
+}
+.jrn__row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 4px 4px 14px; min-height: 44px;
+  border-top: 1px solid var(--line);
+}
+.jrn__row:first-child { border-top: 0; }
+/* Un repas extérieur n'a pas de paquet ni de stock : sa mesure est en kcal, et
+   l'ambre le rattache à la jauge qui, elle, l'a bien compté. */
+.jrn__row.is-ext { box-shadow: inset 3px 0 0 var(--kcal); }
+.jrn__nom {
+  flex: 1; min-width: 0; font-size: 14px; line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.jrn__pct {
+  flex-shrink: 0; font-size: 14px; font-weight: 700; color: var(--txt-muted);
+  font-variant-numeric: tabular-nums;
+}
+.jrn__x {
+  flex-shrink: 0; width: 40px; height: 40px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--txt-dim); font-size: 15px; line-height: 1;
+}
+.jrn__x:active { background: color-mix(in srgb, var(--danger) 22%, var(--surface-2)); color: var(--danger); }
+.jrn__x:disabled { opacity: .4; }
+.jrn__row.is-envoi { animation: pulseEnvoi 1.1s ease-in-out infinite; }
+.jrn__vide { padding: 14px; font-size: 13px; color: var(--txt-dim); }
+
 .ext-section { margin-top: 4px; }
 .ext-section .list-head { margin-top: 16px; }
 .ext-card {
